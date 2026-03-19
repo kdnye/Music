@@ -3,24 +3,42 @@ const { validateUp2StreamBaseUrl } = require('../api/validators');
 
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 
-function decodeHexToAscii(hexValue) {
-  if (typeof hexValue !== 'string' || !hexValue.length) {
+function decodeHexToAscii(hexValue, options = {}) {
+  const { fallback = hexValue, invalidUtf8Fallback = fallback } = options;
+
+  if (hexValue == null) {
+    return hexValue;
+  }
+
+  if (typeof hexValue !== 'string') {
+    return fallback;
+  }
+
+  if (!hexValue.length) {
     return '';
   }
 
   const cleaned = hexValue.replace(/\s+/g, '');
-  if (!/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) {
-    return hexValue;
+  if (!cleaned.length) {
+    return '';
   }
 
-  let output = '';
-  for (let i = 0; i < cleaned.length; i += 2) {
-    const code = Number.parseInt(cleaned.slice(i, i + 2), 16);
-    if (!Number.isNaN(code) && code > 0) {
-      output += String.fromCharCode(code);
-    }
+  if (!/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) {
+    return fallback;
   }
-  return output;
+
+  try {
+    const decoded = Buffer.from(cleaned, 'hex').toString('utf8');
+
+    // U+FFFD indicates invalid UTF-8 sequences were encountered.
+    if (decoded.includes('\uFFFD')) {
+      return invalidUtf8Fallback;
+    }
+
+    return decoded;
+  } catch {
+    return fallback;
+  }
 }
 
 function decodeMetadata(rawPayload) {
