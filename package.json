@@ -1,0 +1,22 @@
+{
+  "name": "tucson-music-audio-control",
+  "version": "1.0.0",
+  "description": "Express middleware and dashboard for DAX88 and Up2Stream control",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.2",
+    "express": "^4.21.2",
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
