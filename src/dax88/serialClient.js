@@ -26,6 +26,27 @@ function initPort() {
   return port;
 }
 
+function closePort() {
+  if (!port) {
+    return Promise.resolve({ closed: false, reason: 'not_initialized' });
+  }
+
+  if (!port.isOpen) {
+    port = null;
+    return Promise.resolve({ closed: false, reason: 'already_closed' });
+  }
+
+  return new Promise((resolve, reject) => {
+    port.close((error) => {
+      if (error) {
+        return reject(error);
+      }
+      port = null;
+      resolve({ closed: true });
+    });
+  });
+}
+
 function ensureOpen(serialPort) {
   if (serialPort.isOpen) {
     return Promise.resolve();
@@ -59,6 +80,7 @@ async function writeCommand(command) {
 }
 
 module.exports = {
+  closePort,
   ensureOpen,
   initPort,
   writeCommand

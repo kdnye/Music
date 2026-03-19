@@ -6,7 +6,7 @@ const {
   buildSourceCommand,
   buildVolumeCommand
 } = require('./src/dax88/commands');
-const { writeCommand } = require('./src/dax88/serialClient');
+const { closePort, writeCommand } = require('./src/dax88/serialClient');
 const { createDax88Monitor } = require('./src/agents/dax88Monitor');
 const { createZoneController } = require('./src/agents/zoneController');
 const { loadGroups } = require('./src/config/groups');
@@ -26,10 +26,96 @@ const {
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
+const STREAMER_IP = process.env.STREAMER_IP || '127.0.0.1';
+const UP2STREAM_BASE_URL = process.env.UP2STREAM_BASE_URL || `http://${STREAMER_IP}`;
+const STREAM_POLL_INTERVAL_MS = Number.parseInt(process.env.UP2STREAM_POLL_INTERVAL_MS || '5000', 10);
+const DAX88_MONITOR_INTERVAL_MS = Number.parseInt(process.env.DAX88_MONITOR_INTERVAL_MS || '3000', 10);
+
+let isShuttingDown = false;
+let shutdownInProgress = false;
+const managedTimeouts = new Set();
+
+function redacted(value) {
+  if (value == null || value === '') {
+    return '<unset>';
+  }
+  return '<redacted>';
+}
+
+function trackTimeoutHandle(timeoutHandle) {
+  managedTimeouts.add(timeoutHandle);
+  return timeoutHandle;
+}
+
+function clearTrackedTimeout(timeoutHandle) {
+  if (!timeoutHandle) return;
+  clearTimeout(timeoutHandle);
+  managedTimeouts.delete(timeoutHandle);
+}
+
+function logStartupConfig() {
+  console.info('[server] startup config:', {
+    port,
+    streamerIp: STREAMER_IP,
+    up2streamBaseUrl: UP2STREAM_BASE_URL,
+    streamPollIntervalMs: STREAM_POLL_INTERVAL_MS,
+    streamTimeoutMs: Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10),
+    dax88MonitorIntervalMs: DAX88_MONITOR_INTERVAL_MS,
+    dax88SerialPath: process.env.DAX88_SERIAL_PATH || '/dev/ttyUSB0',
+    dax88SerialDisabled: process.env.DAX88_SERIAL_DISABLED === 'true',
+    dax88InterWriteDelayMs: Number.parseInt(process.env.DAX88_INTER_WRITE_DELAY_MS || '50', 10),
+    dax88QueueTaskTimeoutMs: Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10),
+    apiAuthToken: redacted(process.env.API_AUTH_TOKEN),
+    dashboardLoginPassword: redacted(process.env.DASHBOARD_LOGIN_PASSWORD)
+  });
+}
 
 app.use(express.json({ limit: '32kb' }));
 app.use(requestLogger);
 app.use(express.static(path.join(__dirname, 'public')));
+
+function requireApiProtection(req, res, next) {
+  if (!req.path.startsWith('/api/')) {
+    return next();
+  }
+
+  if (req.path === '/api/auth/login') {
+    return next();
+  }
+
+  const trustedProxyHeader = req.get('x-auth-request-user') || req.get('x-forwarded-user');
+  if (process.env.TRUST_PROXY_AUTH === 'true' && trustedProxyHeader) {
+    return next();
+  }
+
+  const configuredToken = process.env.API_AUTH_TOKEN;
+  const tokenHeaderName = process.env.API_TOKEN_HEADER || 'x-api-token';
+  const providedToken = req.get(tokenHeaderName);
+
+  if (providedToken && verifyConfiguredToken(providedToken, configuredToken)) {
+    return next();
+  }
+
+  if (!configuredToken && !process.env.DASHBOARD_LOGIN_PASSWORD) {
+    return res.status(503).json({
+      success: false,
+      error: {
+        code: 'AUTH_NOT_CONFIGURED',
+        message: 'API token auth is not configured'
+      }
+    });
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: {
+      code: 'UNAUTHORIZED',
+      message: `Missing or invalid ${tokenHeaderName} header`
+    }
+  });
+}
+
+app.use(requireApiProtection);
 
 const sseClients = new Set();
 
@@ -68,7 +154,7 @@ const systemState = {
 };
 
 try {
-  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
+  const baseUrl = validateUp2StreamBaseUrl(UP2STREAM_BASE_URL);
   streamEndpoint = `${baseUrl}/getPlayerStatus`;
 } catch (error) {
   systemState.stream = {
@@ -165,30 +251,41 @@ const SERIAL_INTER_WRITE_DELAY_MS = Number.parseInt(process.env.DAX88_INTER_WRIT
 const SERIAL_QUEUE_TASK_TIMEOUT_MS = Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10);
 
 let serialQueueTail = Promise.resolve();
+let serialQueueStopped = false;
 
 function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timeoutHandle = trackTimeoutHandle(setTimeout(() => {
+      managedTimeouts.delete(timeoutHandle);
+      resolve();
+    }, ms));
+  });
 }
 
 function withTimeout(promise, timeoutMs, label) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const timeout = trackTimeoutHandle(setTimeout(() => {
+      managedTimeouts.delete(timeout);
       reject(new Error(`Serial queue task timed out (${label}) after ${timeoutMs}ms`));
-    }, timeoutMs);
+    }, timeoutMs));
 
     promise
       .then((result) => {
-        clearTimeout(timeout);
+        clearTrackedTimeout(timeout);
         resolve(result);
       })
       .catch((error) => {
-        clearTimeout(timeout);
+        clearTrackedTimeout(timeout);
         reject(error);
       });
   });
 }
 
 function enqueueSerialTask(task, { timeoutMs = SERIAL_QUEUE_TASK_TIMEOUT_MS, label = 'serial-task' } = {}) {
+  if (serialQueueStopped || isShuttingDown) {
+    return Promise.reject(new Error('Serial queue is stopped'));
+  }
+
   const run = async () => {
     const result = await withTimeout(Promise.resolve().then(task), timeoutMs, label);
     await wait(SERIAL_INTER_WRITE_DELAY_MS);
@@ -680,19 +777,22 @@ function createGuardedPollingLoop({
   function scheduleNext(delayMs = intervalMs) {
     if (stopped) return;
 
-    timer = setTimeout(() => {
+    timer = trackTimeoutHandle(setTimeout(() => {
+      managedTimeouts.delete(timer);
+      timer = null;
       void execute();
-    }, delayMs);
+    }, delayMs));
   }
 
   function scheduleRetry(delayMs = Math.max(100, Math.floor(intervalMs / 3))) {
     if (stopped || retryTimer) return;
 
     logger.warn?.(`[${name}] previous cycle still active; scheduling retry in ${delayMs}ms`);
-    retryTimer = setTimeout(() => {
+    retryTimer = trackTimeoutHandle(setTimeout(() => {
+      managedTimeouts.delete(retryTimer);
       retryTimer = null;
       void execute();
-    }, delayMs);
+    }, delayMs));
   }
 
   async function execute() {
@@ -754,13 +854,13 @@ function createGuardedPollingLoop({
 
 const streamPollingLoop = createGuardedPollingLoop({
   name: 'streamPollerLoop',
-  intervalMs: 5000,
+  intervalMs: STREAM_POLL_INTERVAL_MS,
   runCycle: () => pollStreamMetadataAndUpdateCache()
 });
 
 const dax88PollingLoop = createGuardedPollingLoop({
   name: 'dax88MonitorLoop',
-  intervalMs: 3000,
+  intervalMs: DAX88_MONITOR_INTERVAL_MS,
   runCycle: () => zoneMonitor.pollOnce()
 });
 
@@ -782,14 +882,70 @@ function stopAgents() {
   dax88PollingLoop.stop();
 }
 
+async function drainSerialQueue(timeoutMs = 4000) {
+  try {
+    await Promise.race([
+      serialQueueTail.catch(() => {}),
+      new Promise((resolve) => {
+        const timeoutHandle = trackTimeoutHandle(setTimeout(() => {
+          managedTimeouts.delete(timeoutHandle);
+          console.warn(`[server] serial queue drain timed out after ${timeoutMs}ms`);
+          resolve();
+        }, timeoutMs));
+      })
+    ]);
+  } catch (error) {
+    console.warn('[server] serial queue drain warning:', error.message);
+  }
+}
+
+async function shutdown(signal) {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+  isShuttingDown = true;
+  serialQueueStopped = true;
+  console.info(`[server] received ${signal}; shutting down`);
+
+  stopAgents();
+  for (const timeoutHandle of managedTimeouts) {
+    clearTrackedTimeout(timeoutHandle);
+  }
+
+  await drainSerialQueue();
+
+  try {
+    const closeResult = await closePort();
+    console.info('[server] serial port close result:', closeResult);
+  } catch (error) {
+    console.warn('[server] failed to close serial port:', error.message);
+  }
+
+  for (const client of sseClients) {
+    client.end();
+  }
+  sseClients.clear();
+
+  server.close((error) => {
+    if (error) {
+      console.error('[server] http server close failed:', error.message);
+      process.exit(1);
+      return;
+    }
+    process.exit(0);
+  });
+}
+
 const server = app.listen(port, () => {
+  logStartupConfig();
   console.log(`Audio middleware listening on http://localhost:${port}`);
   void startAgents();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    stopAgents();
-    server.close(() => process.exit(0));
+    void shutdown(signal);
   });
 }
