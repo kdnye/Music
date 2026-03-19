@@ -7,7 +7,7 @@ const {
 } = require('./src/dax88/commands');
 const { closePort, writeCommand } = require('./src/dax88/serialClient');
 const { createDax88Monitor } = require('./src/agents/dax88Monitor');
-const { createZoneController } = require('./src/agents/zoneController');
+const { createZoneController } = require('./src/dax88/zone_controller');
 const { loadGroups } = require('./src/config/groups');
 const {
   issueBrowserToken,
@@ -277,7 +277,7 @@ const zoneMonitor = createDax88Monitor({
 
 const zoneController = createZoneController({
   groups: officeGroups,
-  interWriteDelayMs: 0,
+  interWriteDelayMs: SERIAL_INTER_WRITE_DELAY_MS,
   writeFn: (serialCommand) => dispatchQueuedCommand(serialCommand, { label: 'group-command' })
 });
 
@@ -608,6 +608,27 @@ controlRouter.post('/group/:groupId/volume', async (req, res) => {
     return internalError(res, 'Unable to set group volume', error.message);
   }
 });
+/**
+ * POST /api/dax88/group/action
+ * body: { groupId: string, command: ZoneCommand }
+ */
+controlRouter.post('/group/action', async (req, res) => {
+  try {
+    const { groupId, command } = req.body || {};
+    if (!groupId || !command) {
+      return badRequest(res, 'groupId and command are required');
+    }
+
+    const result = await zoneController.executeGroupCommand({ groupId, command });
+    return ok(res, result);
+  } catch (error) {
+    if (/Unknown|Unsupported|Invalid|must be|between/.test(error.message)) {
+      return badRequest(res, error.message);
+    }
+    return internalError(res, 'Unable to execute group action', error.message);
+  }
+});
+
 /**
  * POST /api/dax88/group-command
  * body: { groupId: string, command: ZoneCommand }
