@@ -129,11 +129,27 @@ function requireApiProtection(req, res, next) {
 app.use(requireApiProtection);
 
 const sseClients = new Set();
+const stateStreamClients = new Set();
 
 function publishEvent(eventName, payload) {
   const message = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
   for (const client of sseClients) {
     client.write(message);
+  }
+}
+
+function buildStateSnapshot() {
+  return {
+    stream: systemState.stream,
+    zones: zoneMonitor.getZoneStates(),
+    hardware: systemState.hardware
+  };
+}
+
+function broadcastStateSnapshot() {
+  const payload = `data: ${JSON.stringify(buildStateSnapshot())}\n\n`;
+  for (const client of stateStreamClients) {
+    client.write(payload);
   }
 }
 
@@ -191,6 +207,7 @@ async function pollStreamMetadataAndUpdateCache() {
     const streamStatus = await fetchPlayerStatus({ cacheTtlMs: streamCacheTtlMs });
     const stream = applyStreamStatusToSystemState(streamStatus);
     publishEvent('stream-status', stream);
+    broadcastStateSnapshot();
     return stream;
   } catch (error) {
     const isKnownStatusError = error instanceof StreamStatusServiceError;
@@ -201,6 +218,7 @@ async function pollStreamMetadataAndUpdateCache() {
       error: isKnownStatusError ? error.reason : formatStreamError(error)
     };
     publishEvent('stream-status', systemState.stream);
+    broadcastStateSnapshot();
     return systemState.stream;
   }
 }
@@ -668,14 +686,24 @@ app.get('/api/events', (req, res) => {
 
   sseClients.add(res);
   res.write('event: connected\ndata: {"ok":true}\n\n');
-  res.write(`event: state-snapshot\ndata: ${JSON.stringify({
-    stream: systemState.stream,
-    zones: zoneMonitor.getZoneStates(),
-    hardware: systemState.hardware
-  })}\n\n`);
+  res.write(`event: state-snapshot\ndata: ${JSON.stringify(buildStateSnapshot())}\n\n`);
 
   req.on('close', () => {
     sseClients.delete(res);
+  });
+});
+
+app.get('/api/state/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  stateStreamClients.add(res);
+  res.write(`data: ${JSON.stringify(buildStateSnapshot())}\n\n`);
+
+  req.on('close', () => {
+    stateStreamClients.delete(res);
   });
 });
 
@@ -805,6 +833,7 @@ const streamPollingLoop = createResilientPollingLoop({
   onHealthChange: ({ offline, failures, error, recoveredAt }) => {
     systemState.hardware.up2stream = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
     publishEvent('hardware-health', { device: 'up2stream', ...systemState.hardware.up2stream });
+    broadcastStateSnapshot();
   },
   runCycle: () => pollStreamMetadataAndUpdateCache()
 });
@@ -815,11 +844,13 @@ const dax88PollingLoop = createResilientPollingLoop({
   onHealthChange: ({ offline, failures, error, recoveredAt }) => {
     systemState.hardware.dax88 = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
     publishEvent('hardware-health', { device: 'dax88', ...systemState.hardware.dax88 });
+    broadcastStateSnapshot();
   },
   runCycle: async () => {
     const result = await zoneMonitor.pollOnce();
     if (result.events.length > 0) {
       publishEvent('zones-state', result.zoneStates);
+      broadcastStateSnapshot();
     }
   }
 });
@@ -878,6 +909,10 @@ async function shutdown(signal) {
     client.end();
   }
   sseClients.clear();
+  for (const client of stateStreamClients) {
+    client.end();
+  }
+  stateStreamClients.clear();
 
   server.close((error) => {
     if (error) {
