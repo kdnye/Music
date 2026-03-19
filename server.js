@@ -20,9 +20,7 @@ const {
 } = require('./src/api/security');
 const {
   validatePowerPayload,
-  validateSourcePayload,
-  validateVolume,
-  validateVolumePayload
+  validateVolume
 } = require('./src/api/validators');
 
 const app = express();
@@ -86,9 +84,106 @@ const zoneMonitor = createDax88Monitor({
   publishDelta: (event) => publishEvent('zone-state-changed', event)
 });
 
+const officeGroups = loadGroups();
 const zoneController = createZoneController({
-  groups: loadGroups()
+  groups: officeGroups
 });
+
+const DAX88_VOLUME_RANGE = Object.freeze({ min: 0, max: 38 });
+const DAX88_SOURCE_RANGE = Object.freeze({ min: 1, max: 8 });
+const ALLOWED_PHYSICAL_ZONES = new Set(['01', '02', '03', '04', '05', '06']);
+const ALLOWED_GROUP_KEYS = new Set(Object.keys(officeGroups));
+
+function formatProtocolValue(value, { min, max, field }) {
+  if (!Number.isInteger(value)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `${field} must be an integer between ${min} and ${max}`,
+      field,
+      received: value
+    };
+  }
+
+  if (value < min || value > max) {
+    return {
+      ok: false,
+      status: 400,
+      error: `${field} must be between ${min} and ${max}`,
+      field,
+      received: value
+    };
+  }
+
+  return {
+    ok: true,
+    value,
+    protocol: value.toString(10).toUpperCase().padStart(2, '0')
+  };
+}
+
+function validateTargetCommandPayload({ target, commandField, value, range }) {
+  if (typeof target !== 'string' || !target.trim()) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'target must be a non-empty string',
+      field: 'target',
+      received: target
+    };
+  }
+
+  const normalizedZoneTarget = String(Number.parseInt(target, 10)).padStart(2, '0');
+  const isZoneTarget = ALLOWED_PHYSICAL_ZONES.has(normalizedZoneTarget);
+  const isGroupTarget = ALLOWED_GROUP_KEYS.has(target);
+
+  if (!isZoneTarget && !isGroupTarget) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'target must be an allowed physical zone or known group key',
+      field: 'target',
+      received: target
+    };
+  }
+
+  const normalizedValue = formatProtocolValue(value, { ...range, field: commandField });
+  if (!normalizedValue.ok) {
+    return normalizedValue;
+  }
+
+  return {
+    ok: true,
+    payload: {
+      targetType: isZoneTarget ? 'zone' : 'group',
+      target: isZoneTarget ? normalizedZoneTarget : target,
+      [commandField]: normalizedValue.value,
+      [`${commandField}Protocol`]: normalizedValue.protocol
+    }
+  };
+}
+
+function createTargetCommandValidator({ commandField, range }) {
+  return (req, res, next) => {
+    const validation = validateTargetCommandPayload({
+      target: req.body?.target,
+      commandField,
+      value: req.body?.[commandField],
+      range
+    });
+
+    if (!validation.ok) {
+      return res.status(validation.status).json({
+        error: validation.error,
+        field: validation.field,
+        received: validation.received
+      });
+    }
+
+    req.validatedTargetCommand = validation.payload;
+    return next();
+  };
+}
 
 const controlRouter = express.Router();
 controlRouter.use(requireControlAuth);
@@ -148,15 +243,42 @@ app.get('/api/auth/status', requireControlAuth, (_req, res) => {
 
 /**
  * POST /api/dax88/volume
- * body: { zone: number (1-8), volume: number (0-38) }
+ * body: { target: string (physical zone or group key), volume: number (0-38) }
  */
-controlRouter.post('/volume', async (req, res) => {
+controlRouter.post('/volume', createTargetCommandValidator({
+  commandField: 'volume',
+  range: DAX88_VOLUME_RANGE
+}), async (req, res) => {
   try {
-    const { zone, volume } = validateVolumePayload(req.body || {});
+    const {
+      targetType,
+      target,
+      volume,
+      volumeProtocol
+    } = req.validatedTargetCommand;
+
+    if (targetType === 'group') {
+      const result = await zoneController.executeGroupCommand({
+        groupId: target,
+        command: { type: 'volume', volume }
+      });
+
+      return ok(res, {
+        targetType,
+        target,
+        volume,
+        volumeProtocol,
+        results: result.results,
+        summary: result.summary,
+        requestId: result.requestId
+      });
+    }
+
+    const zone = Number.parseInt(target, 10);
     const command = buildVolumeCommand(zone, volume);
     const writeResult = await writeCommand(command);
 
-    return ok(res, { zone, volume, command, writeResult });
+    return ok(res, { targetType, target, volume, volumeProtocol, command, writeResult });
   } catch (error) {
     if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
@@ -186,15 +308,42 @@ controlRouter.post('/power', async (req, res) => {
 
 /**
  * POST /api/dax88/source
- * body: { zone: number (1-8), source: number (1-8) }
+ * body: { target: string (physical zone or group key), source: number (1-8) }
  */
-controlRouter.post('/source', async (req, res) => {
+controlRouter.post('/source', createTargetCommandValidator({
+  commandField: 'source',
+  range: DAX88_SOURCE_RANGE
+}), async (req, res) => {
   try {
-    const { zone, source } = validateSourcePayload(req.body || {});
+    const {
+      targetType,
+      target,
+      source,
+      sourceProtocol
+    } = req.validatedTargetCommand;
+
+    if (targetType === 'group') {
+      const result = await zoneController.executeGroupCommand({
+        groupId: target,
+        command: { type: 'source', source }
+      });
+
+      return ok(res, {
+        targetType,
+        target,
+        source,
+        sourceProtocol,
+        results: result.results,
+        summary: result.summary,
+        requestId: result.requestId
+      });
+    }
+
+    const zone = Number.parseInt(target, 10);
     const command = buildSourceCommand(zone, source);
     const writeResult = await writeCommand(command);
 
-    return ok(res, { zone, source, command, writeResult });
+    return ok(res, { targetType, target, source, sourceProtocol, command, writeResult });
   } catch (error) {
     if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
