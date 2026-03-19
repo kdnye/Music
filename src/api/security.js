@@ -3,6 +3,11 @@ const crypto = require('crypto');
 const WINDOW_MS = Number.parseInt(process.env.API_RATE_LIMIT_WINDOW_MS || '60000', 10);
 const MAX_REQUESTS = Number.parseInt(process.env.API_RATE_LIMIT_MAX || '60', 10);
 const AUTH_HEADER = 'authorization';
+const BROWSER_TOKEN_TTL_MS = Number.parseInt(
+  process.env.BROWSER_TOKEN_TTL_MS || '300000',
+  10
+);
+const browserTokenStore = new Map();
 
 const rateLimitStore = new Map();
 
@@ -42,18 +47,28 @@ function requestLogger(req, res, next) {
 
 function requireControlAuth(req, res, next) {
   const configuredToken = process.env.API_AUTH_TOKEN;
-  if (!configuredToken) {
+  const authHeader = req.get(AUTH_HEADER);
+  const providedToken = readBearerToken(authHeader);
+
+  if (providedToken && verifyConfiguredToken(providedToken, configuredToken)) {
+    return next();
+  }
+
+  if (providedToken && verifyBrowserToken(providedToken)) {
+    return next();
+  }
+
+  if (!configuredToken && !process.env.DASHBOARD_LOGIN_PASSWORD) {
     return res.status(503).json({
       success: false,
       error: {
         code: 'AUTH_NOT_CONFIGURED',
-        message: 'Control API auth token is not configured'
+        message: 'Control API auth is not configured'
       }
     });
   }
 
-  const authHeader = req.get(AUTH_HEADER);
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!providedToken) {
     return res.status(401).json({
       success: false,
       error: {
@@ -63,21 +78,66 @@ function requireControlAuth(req, res, next) {
     });
   }
 
-  const providedToken = authHeader.slice(7).trim();
+  return res.status(401).json({
+    success: false,
+    error: {
+      code: 'UNAUTHORIZED',
+      message: 'Invalid or expired bearer token'
+    }
+  });
+}
+
+function readBearerToken(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  return authHeader.slice(7).trim();
+}
+
+function verifyConfiguredToken(providedToken, configuredToken) {
+  if (!configuredToken) {
+    return false;
+  }
+
   const expected = Buffer.from(configuredToken, 'utf8');
   const provided = Buffer.from(providedToken, 'utf8');
 
-  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Invalid bearer token'
-      }
-    });
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
+function verifyBrowserToken(token) {
+  if (!token) {
+    return false;
   }
 
-  return next();
+  const record = browserTokenStore.get(token);
+  if (!record) {
+    return false;
+  }
+
+  if (Date.now() > record.expiresAt) {
+    browserTokenStore.delete(token);
+    return false;
+  }
+
+  return true;
+}
+
+function issueBrowserToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + BROWSER_TOKEN_TTL_MS;
+  browserTokenStore.set(token, { expiresAt });
+  return { token, expiresAt: new Date(expiresAt).toISOString() };
+}
+
+function purgeExpiredBrowserTokens() {
+  const now = Date.now();
+  for (const [token, entry] of browserTokenStore.entries()) {
+    if (entry.expiresAt <= now) {
+      browserTokenStore.delete(token);
+    }
+  }
 }
 
 function rateLimitControls(req, res, next) {
@@ -107,7 +167,10 @@ function rateLimitControls(req, res, next) {
 }
 
 module.exports = {
+  issueBrowserToken,
+  purgeExpiredBrowserTokens,
   requestLogger,
   requireControlAuth,
-  rateLimitControls
+  rateLimitControls,
+  verifyConfiguredToken
 };

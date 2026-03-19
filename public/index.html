@@ -10,12 +10,21 @@
       label { display: inline-block; min-width: 90px; }
       input, select, button { margin: 0.25rem 0; }
       pre { background: #111; color: #9df09d; padding: 1rem; overflow-x: auto; }
+      .status { margin-bottom: 1rem; font-weight: bold; }
+      .error { color: #b30000; }
     </style>
   </head>
   <body>
     <h1>Office Audio Control</h1>
 
     <fieldset>
+      <legend>Dashboard Login</legend>
+      <div><label>Password</label><input id="password" type="password" autocomplete="current-password" /> <button id="loginBtn" onclick="login()">Log In</button></div>
+      <div class="status" id="authStatus">Not authenticated.</div>
+      <div class="error" id="authError"></div>
+    </fieldset>
+
+    <fieldset id="controls" disabled>
       <legend>DAX88 Zone Control</legend>
       <div><label>Zone</label><input id="zone" type="number" min="1" max="8" value="1" /></div>
       <div><label>Volume</label><input id="volume" type="number" min="0" max="38" value="15" /> <button onclick="setVolume()">Set Volume</button></div>
@@ -35,14 +44,86 @@
     <pre id="output">Ready.</pre>
 
     <script>
+      let authToken = null;
+
+      function setAuthenticatedState(isAuthenticated, message = '') {
+        document.getElementById('controls').disabled = !isAuthenticated;
+        document.getElementById('authStatus').textContent = isAuthenticated
+          ? 'Authenticated. Controls enabled.'
+          : 'Not authenticated.';
+        document.getElementById('authError').textContent = message;
+      }
+
+      function parseErrorPayload(payload, fallback) {
+        if (!payload || typeof payload !== 'object') {
+          return fallback;
+        }
+        return payload?.error?.message || payload?.message || fallback;
+      }
+
       async function api(path, method = 'GET', body) {
-        const response = await fetch(path, {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: body ? JSON.stringify(body) : undefined
-        });
-        const json = await response.json();
-        document.getElementById('output').textContent = JSON.stringify(json, null, 2);
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) {
+          headers.Authorization = `Bearer ${authToken}`;
+        }
+
+        let response;
+        let payload;
+
+        try {
+          response = await fetch(path, {
+            method,
+            headers,
+            body: body ? JSON.stringify(body) : undefined
+          });
+          payload = await response.json();
+        } catch (error) {
+          document.getElementById('output').textContent = JSON.stringify({
+            success: false,
+            error: { code: 'NETWORK_ERROR', message: error.message }
+          }, null, 2);
+          return;
+        }
+
+        document.getElementById('output').textContent = JSON.stringify(payload, null, 2);
+
+        if (response.status === 401 || response.status === 403) {
+          authToken = null;
+          setAuthenticatedState(false, 'Authentication failed or expired. Please log in again.');
+        }
+      }
+
+      async function login() {
+        const password = document.getElementById('password').value;
+        document.getElementById('authError').textContent = '';
+        document.getElementById('loginBtn').disabled = true;
+
+        try {
+          const response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password })
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            authToken = null;
+            setAuthenticatedState(false, parseErrorPayload(payload, 'Authentication failed.'));
+            return;
+          }
+
+          authToken = payload?.data?.token || null;
+          if (!authToken) {
+            setAuthenticatedState(false, 'Authentication failed: server did not return a token.');
+            return;
+          }
+
+          setAuthenticatedState(true);
+          document.getElementById('password').value = '';
+        } catch (error) {
+          setAuthenticatedState(false, `Login request failed: ${error.message}`);
+        } finally {
+          document.getElementById('loginBtn').disabled = false;
+        }
       }
 
       function setVolume() {
@@ -69,6 +150,8 @@
       function getStreamStatus() {
         return api('/api/stream/status');
       }
+
+      setAuthenticatedState(false, 'Log in to enable controls.');
     </script>
   </body>
 </html>

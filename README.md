@@ -48,6 +48,12 @@ UP2STREAM_BASE_URL=http://192.168.1.55
 # REQUIRED: bearer token for authenticated control endpoints
 API_AUTH_TOKEN=replace-with-long-random-token
 
+# REQUIRED for dashboard browser login (same-origin auth bootstrap)
+DASHBOARD_LOGIN_PASSWORD=replace-with-long-random-password
+
+# Optional: short-lived browser token TTL in milliseconds (default 300000 = 5 minutes)
+BROWSER_TOKEN_TTL_MS=300000
+
 # Optional: request rate limiting on control endpoints (defaults shown)
 API_RATE_LIMIT_WINDOW_MS=60000
 API_RATE_LIMIT_MAX=60
@@ -81,9 +87,18 @@ Then open:
 ## Security Controls
 
 ### 1) Authentication on control endpoints
-- All control endpoints under `/api/dax88/*` require `Authorization: Bearer <API_AUTH_TOKEN>`.
-- Missing or invalid tokens receive `401 UNAUTHORIZED`.
-- If `API_AUTH_TOKEN` is not configured, control endpoints fail closed with `503 AUTH_NOT_CONFIGURED`.
+- All control endpoints under `/api/dax88/*` require `Authorization: Bearer <token>`.
+- Allowed token sources:
+  - `API_AUTH_TOKEN` (for server-to-server or CLI clients), or
+  - a short-lived browser token issued by `POST /api/auth/login`.
+- Browser login flow:
+  1. Operator opens dashboard on same origin.
+  2. Operator submits dashboard password to `POST /api/auth/login`.
+  3. Backend validates `DASHBOARD_LOGIN_PASSWORD` server-side.
+  4. Backend issues short-lived scoped bearer token (TTL controlled by `BROWSER_TOKEN_TTL_MS`).
+  5. Dashboard keeps controls disabled until authenticated and includes the issued token in `Authorization` headers for control calls.
+- Missing, invalid, or expired tokens receive `401 UNAUTHORIZED`.
+- If neither `API_AUTH_TOKEN` nor `DASHBOARD_LOGIN_PASSWORD` is configured, control endpoints fail closed with `503 AUTH_NOT_CONFIGURED`.
 
 ### 2) Central input validation
 - Control payloads are validated centrally in `src/api/validators.js` before serial writes:
@@ -134,10 +149,33 @@ TLS termination boundary:
 - Device-side protocols (serial, legacy module HTTP APIs) may be non-TLS; isolate these on trusted internal segments and firewall aggressively.
 
 ## API Endpoints
+### `POST /api/auth/login`
+Body:
+```json
+{ "password": "operator-entered-password" }
+```
+
+Success response includes:
+```json
+{
+  "success": true,
+  "data": {
+    "token": "<short-lived-browser-token>",
+    "expiresAt": "2026-03-19T12:00:00.000Z"
+  }
+}
+```
+
+### `GET /api/auth/status`
+Headers:
+```http
+Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
+```
+
 ### `POST /api/dax88/volume`
 Headers:
 ```http
-Authorization: Bearer <API_AUTH_TOKEN>
+Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
 ```
 Body:
 ```json
@@ -147,7 +185,7 @@ Body:
 ### `POST /api/dax88/power`
 Headers:
 ```http
-Authorization: Bearer <API_AUTH_TOKEN>
+Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
 ```
 Body:
 ```json
@@ -157,7 +195,7 @@ Body:
 ### `POST /api/dax88/source`
 Headers:
 ```http
-Authorization: Bearer <API_AUTH_TOKEN>
+Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
 ```
 Body:
 ```json
@@ -170,7 +208,8 @@ Fetches `GET [UP2STREAM_BASE_URL]/getPlayerStatus`, decodes `Title`, `Artist`, a
 ## Troubleshooting
 | Issue | Likely cause | Resolution |
 |---|---|---|
-| `401 UNAUTHORIZED` on control endpoint | Missing/invalid `Authorization` header. | Send `Authorization: Bearer <API_AUTH_TOKEN>` and verify token value. |
+| Dashboard controls stay disabled | User has not logged in or browser token expired. | Log in from the dashboard using `DASHBOARD_LOGIN_PASSWORD`; if idle for longer than `BROWSER_TOKEN_TTL_MS`, re-authenticate. |
+| `401 UNAUTHORIZED` on control endpoint | Missing/invalid/expired bearer token. | Send `Authorization: Bearer <API_AUTH_TOKEN>` (automation) or re-login for a fresh short-lived dashboard token. |
 | `503 AUTH_NOT_CONFIGURED` on control endpoint | `API_AUTH_TOKEN` missing on server. | Set `API_AUTH_TOKEN` and restart service. |
 | `429 RATE_LIMITED` | Too many control requests from same client + endpoint within rate window. | Reduce call frequency or increase `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW_MS` carefully. |
 | Serial permission denied (`EACCES`, `EPERM`) | User is not in the serial-access group for `/dev/tty*`. | Add your user to the device group (commonly `dialout`), then log out/in. Confirm with `ls -l /dev/ttyUSB0`. |

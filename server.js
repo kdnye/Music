@@ -10,9 +10,12 @@ const { createDax88Monitor } = require('./src/agents/dax88Monitor');
 const { createStreamPoller } = require('./src/agents/streamPoller');
 const { createZoneController } = require('./src/agents/zoneController');
 const {
+  issueBrowserToken,
+  purgeExpiredBrowserTokens,
   rateLimitControls,
   requestLogger,
-  requireControlAuth
+  requireControlAuth,
+  verifyConfiguredToken
 } = require('./src/api/security');
 const {
   validatePowerPayload,
@@ -129,6 +132,40 @@ function internalError(res, message, details) {
     error: { code: 'INTERNAL_ERROR', message, details }
   });
 }
+
+function unauthorized(res, message = 'Invalid credentials') {
+  return res.status(401).json({
+    success: false,
+    error: { code: 'UNAUTHORIZED', message }
+  });
+}
+
+app.post('/api/auth/login', (req, res) => {
+  purgeExpiredBrowserTokens();
+  const loginPassword = process.env.DASHBOARD_LOGIN_PASSWORD;
+  if (!loginPassword) {
+    return res.status(503).json({
+      success: false,
+      error: {
+        code: 'AUTH_NOT_CONFIGURED',
+        message: 'Dashboard login password is not configured'
+      }
+    });
+  }
+
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!verifyConfiguredToken(password, loginPassword)) {
+    return unauthorized(res);
+  }
+
+  const issued = issueBrowserToken();
+  return ok(res, { token: issued.token, expiresAt: issued.expiresAt });
+});
+
+app.get('/api/auth/status', requireControlAuth, (_req, res) => {
+  purgeExpiredBrowserTokens();
+  return ok(res, { authenticated: true });
+});
 
 /**
  * POST /api/dax88/volume
