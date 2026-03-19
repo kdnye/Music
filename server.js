@@ -559,21 +559,143 @@ app.get('/api/events', (req, res) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  return ok(res, { status: 'ok' });
+  return ok(res, {
+    status: 'ok',
+    agents: {
+      streamPoller: streamPollingLoop.getStatus(),
+      dax88Monitor: dax88PollingLoop.getStatus()
+    }
+  });
+});
+
+function createGuardedPollingLoop({
+  name,
+  intervalMs,
+  logger = console,
+  runCycle
+}) {
+  let timer = null;
+  let active = false;
+  let stopped = true;
+  let retryTimer = null;
+  let lastRunStartedAt = null;
+  let lastRunFinishedAt = null;
+
+  function clearTimers() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  function scheduleNext(delayMs = intervalMs) {
+    if (stopped) return;
+
+    timer = setTimeout(() => {
+      void execute();
+    }, delayMs);
+  }
+
+  function scheduleRetry(delayMs = Math.max(100, Math.floor(intervalMs / 3))) {
+    if (stopped || retryTimer) return;
+
+    logger.warn?.(`[${name}] previous cycle still active; scheduling retry in ${delayMs}ms`);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void execute();
+    }, delayMs);
+  }
+
+  async function execute() {
+    if (stopped) return;
+
+    if (active) {
+      scheduleRetry();
+      return;
+    }
+
+    active = true;
+    lastRunStartedAt = new Date().toISOString();
+
+    try {
+      await runCycle();
+    } catch (error) {
+      logger.error?.(`[${name}] cycle failed:`, error.message);
+    } finally {
+      lastRunFinishedAt = new Date().toISOString();
+      active = false;
+      scheduleNext(intervalMs);
+    }
+  }
+
+  function start() {
+    if (!stopped) {
+      logger.warn?.(`[${name}] start requested while loop already running`);
+      if (active) {
+        scheduleRetry();
+      }
+      return;
+    }
+
+    stopped = false;
+    clearTimers();
+    void execute();
+  }
+
+  function stop() {
+    stopped = true;
+    clearTimers();
+  }
+
+  function getStatus() {
+    return {
+      intervalMs,
+      active,
+      lastRunStartedAt,
+      lastRunFinishedAt
+    };
+  }
+
+  return {
+    start,
+    stop,
+    getStatus
+  };
+}
+
+const streamPollingLoop = createGuardedPollingLoop({
+  name: 'streamPollerLoop',
+  intervalMs: 5000,
+  runCycle: () => streamPoller.pollOnce()
+});
+
+const dax88PollingLoop = createGuardedPollingLoop({
+  name: 'dax88MonitorLoop',
+  intervalMs: 3000,
+  runCycle: () => zoneMonitor.pollOnce()
 });
 
 async function startAgents() {
   try {
-    streamPoller.start();
-    await zoneMonitor.start();
+    streamPollingLoop.start();
+    if (process.env.DAX88_SERIAL_DISABLED === 'true') {
+      console.warn('[server] dax88 monitor loop disabled by DAX88_SERIAL_DISABLED=true');
+    } else {
+      dax88PollingLoop.start();
+    }
   } catch (error) {
     console.error('[server] failed to start background agents:', error.message);
   }
 }
 
 function stopAgents() {
-  streamPoller.stop();
-  zoneMonitor.stop();
+  streamPollingLoop.stop();
+  dax88PollingLoop.stop();
 }
 
 const server = app.listen(port, () => {
