@@ -107,6 +107,7 @@ module.exports = {
   validatePowerPayload,
   validateSourcePayload,
   validateUp2StreamBaseUrl,
+  validateVolume,
   validateVolumePayload,
   validateZone
 };
