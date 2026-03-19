@@ -2,7 +2,10 @@ const { initPort, ensureOpen } = require('../dax88/serialClient');
 
 const DEFAULT_INTERVAL_MS = 3000;
 const DEFAULT_READ_TIMEOUT_MS = 1200;
-const FRAME_REGEX = /^>(\d{2})([0-9A-Fa-f]{20})\r?$/;
+const DAX88_FRAME_PREFIX = '>';
+const DAX88_KNOWN_ZONES = Object.freeze(['01', '02', '03', '04', '05', '06', '07', '08']);
+const DAX88_STATUS_PAYLOAD_HEX_LENGTH = 20;
+const DAX88_STATUS_FRAME_LENGTH = 1 + 2 + DAX88_STATUS_PAYLOAD_HEX_LENGTH;
 
 function normalizeActiveZones(activeZones = []) {
   if (!Array.isArray(activeZones) || activeZones.length === 0) {
@@ -22,18 +25,31 @@ function parseSignedByte(hex) {
   return value > 127 ? value - 256 : value;
 }
 
-function parseStatusFrame(frame) {
-  const match = FRAME_REGEX.exec(frame.trim());
-  if (!match) {
-    throw new Error('Malformed DAX88 status frame');
+function parseDax88StatusFrame(frame, { knownZoneIds = DAX88_KNOWN_ZONES } = {}) {
+  if (typeof frame !== 'string') return null;
+
+  const normalizedFrame = frame.trim();
+  if (!normalizedFrame.startsWith(DAX88_FRAME_PREFIX)) {
+    return null;
   }
 
-  const zoneId = match[1];
-  const payload = match[2];
-  const bytes = payload.match(/../g);
+  if (normalizedFrame.length !== DAX88_STATUS_FRAME_LENGTH) {
+    return null;
+  }
 
+  const zoneId = normalizedFrame.slice(1, 3);
+  if (!knownZoneIds.includes(zoneId)) {
+    return null;
+  }
+
+  const payload = normalizedFrame.slice(3);
+  if (!/^[0-9A-Fa-f]{20}$/.test(payload)) {
+    return null;
+  }
+
+  const bytes = payload.match(/../g);
   if (!bytes || bytes.length !== 10) {
-    throw new Error('Malformed DAX88 payload length');
+    return null;
   }
 
   const [aa, bb, cc, dd, ee, ff, gg, hh, ii, jj] = bytes;
@@ -119,7 +135,14 @@ function createDax88Monitor({
     }
 
     const frame = await readFrame();
-    const nextState = parseStatusFrame(frame);
+    const nextState = parseDax88StatusFrame(frame, { knownZoneIds: zones });
+    if (!nextState) {
+      logger.warn?.('[dax88Monitor] ignoring malformed status frame', {
+        zoneId,
+        frame: String(frame).trim()
+      });
+      return null;
+    }
 
     const previousState = zoneStates[zoneId];
     zoneStates[zoneId] = nextState;
@@ -204,5 +227,5 @@ function createDax88Monitor({
 module.exports = {
   createDax88Monitor,
   normalizeActiveZones,
-  parseStatusFrame
+  parseDax88StatusFrame
 };
