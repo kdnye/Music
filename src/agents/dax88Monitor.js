@@ -92,6 +92,7 @@ function createDax88Monitor({
   serialPort = initPort(),
   intervalMs = DEFAULT_INTERVAL_MS,
   readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
+  writeQuery,
   publishDelta,
   logger = console
 } = {}) {
@@ -103,15 +104,19 @@ function createDax88Monitor({
 
   async function pollZone(zoneId) {
     const query = `?${zoneId}\r`;
-    await new Promise((resolve, reject) => {
-      serialPort.write(query, (error) => {
-        if (error) return reject(error);
-        serialPort.drain((drainError) => {
-          if (drainError) return reject(drainError);
-          resolve();
+    if (typeof writeQuery === 'function') {
+      await writeQuery(query, { zoneId });
+    } else {
+      await new Promise((resolve, reject) => {
+        serialPort.write(query, (error) => {
+          if (error) return reject(error);
+          serialPort.drain((drainError) => {
+            if (drainError) return reject(drainError);
+            resolve();
+          });
         });
       });
-    });
+    }
 
     const frame = await readFrame();
     const nextState = parseStatusFrame(frame);

@@ -6,11 +6,7 @@ const {
 } = require('../dax88/commands');
 const { writeCommand } = require('../dax88/serialClient');
 
-const DEFAULT_INTER_WRITE_DELAY_MS = 50;
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const DEFAULT_INTER_WRITE_DELAY_MS = 0;
 
 function normalizeZoneId(zoneId) {
   const n = Number.parseInt(zoneId, 10);
@@ -60,7 +56,11 @@ function createZoneController({
 } = {}) {
   async function writeWithFallback(serialCommand) {
     if (!serialPort) {
-      return writeFn(serialCommand);
+      const result = await writeFn(serialCommand);
+      if (result && result.ok === false) {
+        throw new Error(result.error || 'Unknown serial write error');
+      }
+      return result;
     }
 
     return new Promise((resolve, reject) => {
@@ -95,8 +95,8 @@ function createZoneController({
         results.push({ zoneId, ok: false, error: error.message || 'Unknown serial write error' });
       }
 
-      if (i < zones.length - 1) {
-        await delay(interWriteDelayMs);
+      if (interWriteDelayMs > 0 && i < zones.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, interWriteDelayMs));
       }
     }
 

@@ -79,20 +79,86 @@ const streamPoller = (() => {
   }
 })();
 
-const zoneMonitor = createDax88Monitor({
-  activeZones: parseActiveZones(),
-  publishDelta: (event) => publishEvent('zone-state-changed', event)
-});
-
 const officeGroups = loadGroups();
-const zoneController = createZoneController({
-  groups: officeGroups
-});
-
 const DAX88_VOLUME_RANGE = Object.freeze({ min: 0, max: 38 });
 const DAX88_SOURCE_RANGE = Object.freeze({ min: 1, max: 8 });
 const ALLOWED_PHYSICAL_ZONES = new Set(['01', '02', '03', '04', '05', '06']);
 const ALLOWED_GROUP_KEYS = new Set(Object.keys(officeGroups));
+const SERIAL_INTER_WRITE_DELAY_MS = Number.parseInt(process.env.DAX88_INTER_WRITE_DELAY_MS || '50', 10);
+const SERIAL_QUEUE_TASK_TIMEOUT_MS = Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10);
+
+let serialQueueTail = Promise.resolve();
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Serial queue task timed out (${label}) after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+  });
+}
+
+function enqueueSerialTask(task, { timeoutMs = SERIAL_QUEUE_TASK_TIMEOUT_MS, label = 'serial-task' } = {}) {
+  const run = async () => {
+    const result = await withTimeout(Promise.resolve().then(task), timeoutMs, label);
+    await wait(SERIAL_INTER_WRITE_DELAY_MS);
+    return result;
+  };
+
+  const queuedTask = serialQueueTail.then(run, run);
+  serialQueueTail = queuedTask.catch(() => {});
+  return queuedTask;
+}
+
+async function dispatchQueuedCommand(command, { timeoutMs, label = 'serial-write' } = {}) {
+  try {
+    const writeResult = await enqueueSerialTask(
+      () => writeCommand(command),
+      { timeoutMs, label }
+    );
+
+    return { ok: true, command, writeResult };
+  } catch (error) {
+    return {
+      ok: false,
+      command,
+      error: error.message || 'Unknown serial queue error'
+    };
+  }
+}
+
+const zoneMonitor = createDax88Monitor({
+  activeZones: parseActiveZones(),
+  writeQuery: async (query, { zoneId } = {}) => {
+    const queued = await dispatchQueuedCommand(query, {
+      label: `status-monitor-zone-${zoneId || 'unknown'}`
+    });
+
+    if (!queued.ok) {
+      throw new Error(queued.error);
+    }
+  },
+  publishDelta: (event) => publishEvent('zone-state-changed', event)
+});
+
+const zoneController = createZoneController({
+  groups: officeGroups,
+  interWriteDelayMs: 0,
+  writeFn: (serialCommand) => dispatchQueuedCommand(serialCommand, { label: 'group-command' })
+});
 
 function formatProtocolValue(value, { min, max, field }) {
   if (!Number.isInteger(value)) {
@@ -276,9 +342,22 @@ controlRouter.post('/volume', createTargetCommandValidator({
 
     const zone = Number.parseInt(target, 10);
     const command = buildVolumeCommand(zone, volume);
-    const writeResult = await writeCommand(command);
+    const queueResult = await dispatchQueuedCommand(command, {
+      label: `volume-zone-${target}`
+    });
+    if (!queueResult.ok) {
+      throw new Error(queueResult.error);
+    }
 
-    return ok(res, { targetType, target, volume, volumeProtocol, command, writeResult });
+    return ok(res, {
+      targetType,
+      target,
+      volume,
+      volumeProtocol,
+      command,
+      writeResult: queueResult.writeResult,
+      queue: { ok: queueResult.ok }
+    });
   } catch (error) {
     if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
@@ -295,9 +374,20 @@ controlRouter.post('/power', async (req, res) => {
   try {
     const { zone, power } = validatePowerPayload(req.body || {});
     const command = buildPowerCommand(zone, power);
-    const writeResult = await writeCommand(command);
+    const queueResult = await dispatchQueuedCommand(command, {
+      label: `power-zone-${String(zone).padStart(2, '0')}`
+    });
+    if (!queueResult.ok) {
+      throw new Error(queueResult.error);
+    }
 
-    return ok(res, { zone, power, command, writeResult });
+    return ok(res, {
+      zone,
+      power,
+      command,
+      writeResult: queueResult.writeResult,
+      queue: { ok: queueResult.ok }
+    });
   } catch (error) {
     if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
@@ -341,9 +431,22 @@ controlRouter.post('/source', createTargetCommandValidator({
 
     const zone = Number.parseInt(target, 10);
     const command = buildSourceCommand(zone, source);
-    const writeResult = await writeCommand(command);
+    const queueResult = await dispatchQueuedCommand(command, {
+      label: `source-zone-${target}`
+    });
+    if (!queueResult.ok) {
+      throw new Error(queueResult.error);
+    }
 
-    return ok(res, { targetType, target, source, sourceProtocol, command, writeResult });
+    return ok(res, {
+      targetType,
+      target,
+      source,
+      sourceProtocol,
+      command,
+      writeResult: queueResult.writeResult,
+      queue: { ok: queueResult.ok }
+    });
   } catch (error) {
     if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
