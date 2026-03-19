@@ -110,12 +110,16 @@ function createDax88Monitor({
   readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
   writeQuery,
   publishDelta,
+  failureThreshold = 3,
+  onHealthChange,
   logger = console
 } = {}) {
   const zones = normalizeActiveZones(activeZones);
   const zoneStates = {};
   let timer = null;
   let polling = false;
+  let consecutiveFailures = 0;
+  let offline = false;
   const readFrame = createSerialFrameReader(serialPort, readTimeoutMs);
 
   async function pollZone(zoneId) {
@@ -167,6 +171,7 @@ function createDax88Monitor({
 
   async function pollOnce() {
     const events = [];
+    let cycleFailures = 0;
 
     for (const zoneId of zones) {
       try {
@@ -175,13 +180,36 @@ function createDax88Monitor({
           events.push(event);
         }
       } catch (error) {
+        cycleFailures += 1;
         logger.error?.(`[dax88Monitor] poll failed for zone ${zoneId}:`, error.message);
       }
     }
 
+    if (cycleFailures > 0) {
+      consecutiveFailures += 1;
+      offline = consecutiveFailures >= failureThreshold;
+      onHealthChange?.({
+        offline,
+        failures: consecutiveFailures,
+        error: `cycle failed for ${cycleFailures} zone(s)`,
+        at: new Date().toISOString()
+      });
+    } else if (consecutiveFailures > 0 || offline) {
+      consecutiveFailures = 0;
+      offline = false;
+      onHealthChange?.({
+        offline,
+        failures: 0,
+        error: null,
+        at: new Date().toISOString()
+      });
+    }
+
     return {
       zoneStates: { ...zoneStates },
-      events
+      events,
+      offline,
+      failures: consecutiveFailures
     };
   }
 

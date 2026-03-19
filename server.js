@@ -1,11 +1,14 @@
-const express = require('express');
 const path = require('path');
+const express = require('express');
+const { loadEnvFile } = require('./src/config/loadEnv');
+
+loadEnvFile();
 const {
   buildPowerCommand,
   buildSourceCommand,
   buildVolumeCommand
 } = require('./src/dax88/commands');
-const { closePort, writeCommand } = require('./src/dax88/serialClient');
+const { closePort, drainQueue, stopQueue, writeCommand } = require('./src/dax88/serialClient');
 const { createDax88Monitor } = require('./src/agents/dax88Monitor');
 const { createZoneController } = require('./src/dax88/zone_controller');
 const { loadGroups } = require('./src/config/groups');
@@ -28,7 +31,7 @@ const {
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
-const STREAMER_IP = process.env.STREAMER_IP || '127.0.0.1';
+const STREAMER_IP = process.env.UP2STREAM_IP || process.env.STREAMER_IP || '127.0.0.1';
 const UP2STREAM_BASE_URL = process.env.UP2STREAM_BASE_URL || `http://${STREAMER_IP}`;
 const STREAM_POLL_INTERVAL_MS = Number.parseInt(process.env.UP2STREAM_POLL_INTERVAL_MS || '5000', 10);
 const DAX88_MONITOR_INTERVAL_MS = Number.parseInt(process.env.DAX88_MONITOR_INTERVAL_MS || '3000', 10);
@@ -63,7 +66,7 @@ function logStartupConfig() {
     streamPollIntervalMs: STREAM_POLL_INTERVAL_MS,
     streamTimeoutMs: Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10),
     dax88MonitorIntervalMs: DAX88_MONITOR_INTERVAL_MS,
-    dax88SerialPath: process.env.DAX88_SERIAL_PATH || '/dev/ttyUSB0',
+    dax88SerialPath: process.env.DAX88_SERIAL_PORT || process.env.DAX88_SERIAL_PATH || '/dev/ttyUSB0',
     dax88SerialDisabled: process.env.DAX88_SERIAL_DISABLED === 'true',
     dax88InterWriteDelayMs: Number.parseInt(process.env.DAX88_INTER_WRITE_DELAY_MS || '50', 10),
     dax88QueueTaskTimeoutMs: Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10),
@@ -151,6 +154,10 @@ function parseActiveZones() {
 const streamEndpoint = `${UP2STREAM_BASE_URL}/getPlayerStatus`;
 const streamCacheTtlMs = Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10);
 const systemState = {
+  hardware: {
+    up2stream: { offline: false, failures: 0, lastError: null, recoveredAt: null },
+    dax88: { offline: false, failures: 0, lastError: null, recoveredAt: null }
+  },
   stream: {
     title: '',
     artist: '',
@@ -182,7 +189,9 @@ function applyStreamStatusToSystemState(streamStatus) {
 async function pollStreamMetadataAndUpdateCache() {
   try {
     const streamStatus = await fetchPlayerStatus({ cacheTtlMs: streamCacheTtlMs });
-    return applyStreamStatusToSystemState(streamStatus);
+    const stream = applyStreamStatusToSystemState(streamStatus);
+    publishEvent('stream-status', stream);
+    return stream;
   } catch (error) {
     const isKnownStatusError = error instanceof StreamStatusServiceError;
     systemState.stream = {
@@ -191,6 +200,7 @@ async function pollStreamMetadataAndUpdateCache() {
       stale: true,
       error: isKnownStatusError ? error.reason : formatStreamError(error)
     };
+    publishEvent('stream-status', systemState.stream);
     return systemState.stream;
   }
 }
@@ -200,63 +210,9 @@ const DAX88_VOLUME_RANGE = Object.freeze({ min: 0, max: 38 });
 const DAX88_SOURCE_RANGE = Object.freeze({ min: 1, max: 8 });
 const ALLOWED_PHYSICAL_ZONES = new Set(['01', '02', '03', '04', '05', '06']);
 const ALLOWED_GROUP_KEYS = new Set(Object.keys(officeGroups));
-const SERIAL_INTER_WRITE_DELAY_MS = Number.parseInt(process.env.DAX88_INTER_WRITE_DELAY_MS || '50', 10);
-const SERIAL_QUEUE_TASK_TIMEOUT_MS = Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10);
-
-let serialQueueTail = Promise.resolve();
-let serialQueueStopped = false;
-
-function wait(ms) {
-  return new Promise((resolve) => {
-    const timeoutHandle = trackTimeoutHandle(setTimeout(() => {
-      managedTimeouts.delete(timeoutHandle);
-      resolve();
-    }, ms));
-  });
-}
-
-function withTimeout(promise, timeoutMs, label) {
-  return new Promise((resolve, reject) => {
-    const timeout = trackTimeoutHandle(setTimeout(() => {
-      managedTimeouts.delete(timeout);
-      reject(new Error(`Serial queue task timed out (${label}) after ${timeoutMs}ms`));
-    }, timeoutMs));
-
-    promise
-      .then((result) => {
-        clearTrackedTimeout(timeout);
-        resolve(result);
-      })
-      .catch((error) => {
-        clearTrackedTimeout(timeout);
-        reject(error);
-      });
-  });
-}
-
-function enqueueSerialTask(task, { timeoutMs = SERIAL_QUEUE_TASK_TIMEOUT_MS, label = 'serial-task' } = {}) {
-  if (serialQueueStopped || isShuttingDown) {
-    return Promise.reject(new Error('Serial queue is stopped'));
-  }
-
-  const run = async () => {
-    const result = await withTimeout(Promise.resolve().then(task), timeoutMs, label);
-    await wait(SERIAL_INTER_WRITE_DELAY_MS);
-    return result;
-  };
-
-  const queuedTask = serialQueueTail.then(run, run);
-  serialQueueTail = queuedTask.catch(() => {});
-  return queuedTask;
-}
-
 async function dispatchQueuedCommand(command, { timeoutMs, label = 'serial-write' } = {}) {
   try {
-    const writeResult = await enqueueSerialTask(
-      () => writeCommand(command),
-      { timeoutMs, label }
-    );
-
+    const writeResult = await writeCommand(command, { timeoutMs, label });
     return { ok: true, command, writeResult };
   } catch (error) {
     return {
@@ -283,7 +239,6 @@ const zoneMonitor = createDax88Monitor({
 
 const zoneController = createZoneController({
   groups: officeGroups,
-  interWriteDelayMs: SERIAL_INTER_WRITE_DELAY_MS,
   writeFn: (serialCommand) => dispatchQueuedCommand(serialCommand, { label: 'group-command' })
 });
 
@@ -713,6 +668,11 @@ app.get('/api/events', (req, res) => {
 
   sseClients.add(res);
   res.write('event: connected\ndata: {"ok":true}\n\n');
+  res.write(`event: state-snapshot\ndata: ${JSON.stringify({
+    stream: systemState.stream,
+    zones: zoneMonitor.getZoneStates(),
+    hardware: systemState.hardware
+  })}\n\n`);
 
   req.on('close', () => {
     sseClients.delete(res);
@@ -732,38 +692,29 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/state', (_req, res) => {
   return ok(res, {
     stream: systemState.stream,
-    zones: zoneMonitor.getZoneStates()
+    zones: zoneMonitor.getZoneStates(),
+    hardware: systemState.hardware
   });
 });
 
-function createGuardedPollingLoop({
+function createResilientPollingLoop({
   name,
   intervalMs,
+  maxConsecutiveFailures = 3,
+  backoffMs = [10000, 30000, 60000],
   logger = console,
+  onHealthChange,
   runCycle
 }) {
   let timer = null;
   let active = false;
   let stopped = true;
-  let retryTimer = null;
   let lastRunStartedAt = null;
   let lastRunFinishedAt = null;
-
-  function clearTimers() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-  }
+  let consecutiveFailures = 0;
 
   function scheduleNext(delayMs = intervalMs) {
     if (stopped) return;
-
     timer = trackTimeoutHandle(setTimeout(() => {
       managedTimeouts.delete(timer);
       timer = null;
@@ -771,56 +722,63 @@ function createGuardedPollingLoop({
     }, delayMs));
   }
 
-  function scheduleRetry(delayMs = Math.max(100, Math.floor(intervalMs / 3))) {
-    if (stopped || retryTimer) return;
-
-    logger.warn?.(`[${name}] previous cycle still active; scheduling retry in ${delayMs}ms`);
-    retryTimer = trackTimeoutHandle(setTimeout(() => {
-      managedTimeouts.delete(retryTimer);
-      retryTimer = null;
-      void execute();
-    }, delayMs));
+  function clearTimer() {
+    if (!timer) return;
+    clearTimeout(timer);
+    managedTimeouts.delete(timer);
+    timer = null;
   }
 
   async function execute() {
-    if (stopped) return;
-
-    if (active) {
-      scheduleRetry();
-      return;
-    }
+    if (stopped || active) return;
 
     active = true;
     lastRunStartedAt = new Date().toISOString();
 
     try {
       await runCycle();
+      if (consecutiveFailures > 0) {
+        onHealthChange?.({
+          name,
+          offline: false,
+          failures: 0,
+          recoveredAt: new Date().toISOString(),
+          error: null
+        });
+      }
+      consecutiveFailures = 0;
+      scheduleNext(intervalMs);
     } catch (error) {
-      logger.error?.(`[${name}] cycle failed:`, error.message);
+      consecutiveFailures += 1;
+      const offline = consecutiveFailures >= maxConsecutiveFailures;
+      onHealthChange?.({
+        name,
+        offline,
+        failures: consecutiveFailures,
+        error: error.message || `${name} cycle failed`
+      });
+
+      const backoffIndex = Math.min(consecutiveFailures - 1, backoffMs.length - 1);
+      const delay = backoffMs[backoffIndex] || intervalMs;
+      logger.error?.(`[${name}] cycle failed (${consecutiveFailures}):`, error.message);
+      logger.warn?.(`[${name}] scheduling retry in ${delay}ms`);
+      scheduleNext(delay);
     } finally {
       lastRunFinishedAt = new Date().toISOString();
       active = false;
-      scheduleNext(intervalMs);
     }
   }
 
   function start() {
-    if (!stopped) {
-      logger.warn?.(`[${name}] start requested while loop already running`);
-      if (active) {
-        scheduleRetry();
-      }
-      return;
-    }
-
+    if (!stopped) return;
     stopped = false;
-    clearTimers();
+    clearTimer();
     void execute();
   }
 
   function stop() {
     stopped = true;
-    clearTimers();
+    clearTimer();
   }
 
   function getStatus() {
@@ -828,7 +786,9 @@ function createGuardedPollingLoop({
       intervalMs,
       active,
       lastRunStartedAt,
-      lastRunFinishedAt
+      lastRunFinishedAt,
+      consecutiveFailures,
+      offline: consecutiveFailures >= maxConsecutiveFailures
     };
   }
 
@@ -839,16 +799,29 @@ function createGuardedPollingLoop({
   };
 }
 
-const streamPollingLoop = createGuardedPollingLoop({
+const streamPollingLoop = createResilientPollingLoop({
   name: 'streamPollerLoop',
   intervalMs: STREAM_POLL_INTERVAL_MS,
+  onHealthChange: ({ offline, failures, error, recoveredAt }) => {
+    systemState.hardware.up2stream = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
+    publishEvent('hardware-health', { device: 'up2stream', ...systemState.hardware.up2stream });
+  },
   runCycle: () => pollStreamMetadataAndUpdateCache()
 });
 
-const dax88PollingLoop = createGuardedPollingLoop({
+const dax88PollingLoop = createResilientPollingLoop({
   name: 'dax88MonitorLoop',
   intervalMs: DAX88_MONITOR_INTERVAL_MS,
-  runCycle: () => zoneMonitor.pollOnce()
+  onHealthChange: ({ offline, failures, error, recoveredAt }) => {
+    systemState.hardware.dax88 = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
+    publishEvent('hardware-health', { device: 'dax88', ...systemState.hardware.dax88 });
+  },
+  runCycle: async () => {
+    const result = await zoneMonitor.pollOnce();
+    if (result.events.length > 0) {
+      publishEvent('zones-state', result.zoneStates);
+    }
+  }
 });
 
 async function startAgents() {
@@ -871,16 +844,7 @@ function stopAgents() {
 
 async function drainSerialQueue(timeoutMs = 4000) {
   try {
-    await Promise.race([
-      serialQueueTail.catch(() => {}),
-      new Promise((resolve) => {
-        const timeoutHandle = trackTimeoutHandle(setTimeout(() => {
-          managedTimeouts.delete(timeoutHandle);
-          console.warn(`[server] serial queue drain timed out after ${timeoutMs}ms`);
-          resolve();
-        }, timeoutMs));
-      })
-    ]);
+    await drainQueue(timeoutMs);
   } catch (error) {
     console.warn('[server] serial queue drain warning:', error.message);
   }
@@ -893,7 +857,7 @@ async function shutdown(signal) {
 
   shutdownInProgress = true;
   isShuttingDown = true;
-  serialQueueStopped = true;
+  stopQueue();
   console.info(`[server] received ${signal}; shutting down`);
 
   stopAgents();

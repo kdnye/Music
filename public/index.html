@@ -43,6 +43,7 @@
     <fieldset>
       <legend>Up2Stream Status</legend>
       <button onclick="getStreamStatus()">Refresh Status</button>
+      <div id="liveStatus" class="status">Live updates: disconnected</div>
     </fieldset>
 
     <pre id="output">Ready.</pre>
@@ -110,6 +111,82 @@
         }
 
         document.getElementById('authError').textContent = '';
+      }
+
+
+      let eventsConnection = null;
+      let liveState = {
+        stream: null,
+        zones: {},
+        hardware: null
+      };
+
+      function renderLiveState() {
+        const snapshot = {
+          liveState,
+          auth: { authenticated: Boolean(authToken) },
+          updatedAt: new Date().toISOString()
+        };
+        document.getElementById('output').textContent = JSON.stringify(snapshot, null, 2);
+      }
+
+      function updateLiveStatusLabel(message, isError = false) {
+        const liveStatus = document.getElementById('liveStatus');
+        liveStatus.textContent = `Live updates: ${message}`;
+        liveStatus.className = isError ? 'status error' : 'status';
+      }
+
+      function connectEvents() {
+        if (eventsConnection) {
+          eventsConnection.close();
+        }
+
+        eventsConnection = new EventSource('/api/events');
+
+        eventsConnection.addEventListener('connected', () => {
+          updateLiveStatusLabel('connected');
+        });
+
+        eventsConnection.addEventListener('state-snapshot', (event) => {
+          const payload = JSON.parse(event.data || '{}');
+          liveState = {
+            stream: payload.stream || liveState.stream,
+            zones: payload.zones || liveState.zones,
+            hardware: payload.hardware || liveState.hardware
+          };
+          renderLiveState();
+        });
+
+        eventsConnection.addEventListener('stream-status', (event) => {
+          liveState.stream = JSON.parse(event.data || '{}');
+          renderLiveState();
+        });
+
+        eventsConnection.addEventListener('zone-state-changed', (event) => {
+          const payload = JSON.parse(event.data || '{}');
+          if (payload.zoneId && payload.state) {
+            liveState.zones[payload.zoneId] = payload.state;
+            renderLiveState();
+          }
+        });
+
+        eventsConnection.addEventListener('zones-state', (event) => {
+          liveState.zones = JSON.parse(event.data || '{}');
+          renderLiveState();
+        });
+
+        eventsConnection.addEventListener('hardware-health', (event) => {
+          const payload = JSON.parse(event.data || '{}');
+          liveState.hardware = liveState.hardware || {};
+          if (payload.device) {
+            liveState.hardware[payload.device] = payload;
+            renderLiveState();
+          }
+        });
+
+        eventsConnection.onerror = () => {
+          updateLiveStatusLabel('reconnecting...', true);
+        };
       }
 
       async function api(path, method = 'GET', body) {
@@ -205,6 +282,7 @@
       }
 
       setAuthenticatedState(false, 'Log in or provide a bearer token to enable controls.');
+      connectEvents();
     </script>
   </body>
 </html>

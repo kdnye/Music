@@ -122,7 +122,8 @@ function buildCacheResponse(reason, ttlMs) {
 async function fetchPlayerStatus(options = {}) {
   const { cacheTtlMs } = options;
   const ttlMs = getCacheTtlMs(cacheTtlMs);
-  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
+  const configuredBaseUrl = process.env.UP2STREAM_BASE_URL || (process.env.UP2STREAM_IP ? `http://${process.env.UP2STREAM_IP}` : null);
+  const baseUrl = validateUp2StreamBaseUrl(configuredBaseUrl);
   const url = `${baseUrl}/getPlayerStatus`;
   try {
     const response = await axios.get(url, {
