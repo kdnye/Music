@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { validateUp2StreamBaseUrl } = require('../api/validators');
 
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 
@@ -33,12 +34,8 @@ function decodeMetadata(rawPayload) {
 }
 
 async function fetchPlayerStatus() {
-  const baseUrl = process.env.UP2STREAM_BASE_URL;
-  if (!baseUrl) {
-    throw new Error('UP2STREAM_BASE_URL is required');
-  }
-
-  const url = `${baseUrl.replace(/\/$/, '')}/getPlayerStatus`;
+  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
+  const url = `${baseUrl}/getPlayerStatus`;
   const { data } = await axios.get(url, {
     timeout: Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10)
   });

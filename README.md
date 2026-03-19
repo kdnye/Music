@@ -7,8 +7,10 @@ This repository contains a working Node.js project for centralized office audio 
 - A lightweight vanilla HTML dashboard served from `public/index.html`.
 
 ## Project Structure
-- `server.js` - Express entrypoint and API routes.
-- `src/dax88/commands.js` - DAX88 validation and serial command formatting.
+- `server.js` - Express entrypoint, API routes, auth/rate limiting, and request logging.
+- `src/api/security.js` - Central request logging, bearer token auth, and per-endpoint rate limiting.
+- `src/api/validators.js` - Central payload and URL validation for control/status operations.
+- `src/dax88/commands.js` - DAX88 serial command formatting.
 - `src/dax88/serialClient.js` - Serial port write client (`serialport`).
 - `src/stream/statusService.js` - Up2Stream HTTP fetch + metadata decoding (`axios`).
 - `public/index.html` - Minimal dashboard UI for testing endpoints.
@@ -42,6 +44,13 @@ DAX88_SERIAL_PATH=/dev/ttyUSB0
 
 # Up2Stream module IP (single module)
 UP2STREAM_BASE_URL=http://192.168.1.55
+
+# REQUIRED: bearer token for authenticated control endpoints
+API_AUTH_TOKEN=replace-with-long-random-token
+
+# Optional: request rate limiting on control endpoints (defaults shown)
+API_RATE_LIMIT_WINDOW_MS=60000
+API_RATE_LIMIT_MAX=60
 ```
 
 Optional runtime flags:
@@ -69,27 +78,87 @@ Then open:
 - Dashboard: `http://localhost:3000/`
 - Health: `http://localhost:3000/api/health`
 
-### Troubleshooting
-| Issue | Likely cause | Resolution |
-|---|---|---|
-| Serial permission denied (`EACCES`, `EPERM`) | User is not in the serial-access group for `/dev/tty*`. | Add your user to the device group (commonly `dialout`), then log out/in. Confirm with `ls -l /dev/ttyUSB0`. |
-| Serial device path unavailable (`ENOENT`) | `DAX88_SERIAL_PATH` points to a non-existent device. | Verify the actual device path (`/dev/ttyUSB0`, `/dev/ttyACM0`, etc.) and update `DAX88_SERIAL_PATH`. |
-| Up2Stream status fetch fails (`ECONNREFUSED`, timeout, 5xx) | Module IP is wrong/unreachable or module is offline. | Confirm `UP2STREAM_BASE_URL`, test `http://<IP>/getPlayerStatus` directly, and verify network/subnet connectivity. |
+## Security Controls
+
+### 1) Authentication on control endpoints
+- All control endpoints under `/api/dax88/*` require `Authorization: Bearer <API_AUTH_TOKEN>`.
+- Missing or invalid tokens receive `401 UNAUTHORIZED`.
+- If `API_AUTH_TOKEN` is not configured, control endpoints fail closed with `503 AUTH_NOT_CONFIGURED`.
+
+### 2) Central input validation
+- Control payloads are validated centrally in `src/api/validators.js` before serial writes:
+  - `zone` must be integer `1..8`
+  - `volume` must be integer `0..38`
+  - `source` must be integer `1..8`
+  - `power` must be boolean or `on/off/true/false/1/0`
+- Unknown JSON fields are rejected to prevent command ambiguity.
+- Upstream stream URL is validated before HTTP fetch (`UP2STREAM_BASE_URL` must be valid `http/https` URL).
+
+### 3) Rate limiting + request logging
+- `/api/dax88/*` requests are rate-limited per client IP and endpoint.
+- Defaults: `60` requests per `60` seconds (`API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW_MS`).
+- Breaches return `429 RATE_LIMITED`.
+- Structured logs are emitted for every request with:
+  - timestamp
+  - requestId
+  - client IP
+  - method + path
+  - status code
+  - latency
+  - user-agent
+
+## Network Segmentation and TLS Boundaries
+
+This service assumes three security zones:
+
+1. **Dashboard client zone** (user workstations / browser clients)
+   - Should only reach the middleware through a reverse proxy or API gateway.
+2. **Middleware host zone** (this Node.js service)
+   - Should be the only host allowed to call:
+     - RS-232 adapter host / USB serial bridge for DAX88
+     - Up2Stream module subnet
+3. **Device zone** (DAX88 + Up2Stream modules)
+   - Should not be directly reachable from user workstations.
+
+Recommended policy model:
+- Allow dashboard-to-middleware traffic only (deny direct dashboard-to-device traffic).
+- Allow middleware-to-device traffic only on required protocols/ports.
+- Deny east-west traffic inside device subnet except required control paths.
+
+TLS termination boundary:
+- Terminate TLS at the reverse proxy/load balancer in front of middleware.
+- Use HTTPS between dashboard clients and the proxy.
+- Between proxy and middleware, use one of:
+  - loopback/private interface on same host, or
+  - mTLS on internal network if crossing hosts/VLANs.
+- Device-side protocols (serial, legacy module HTTP APIs) may be non-TLS; isolate these on trusted internal segments and firewall aggressively.
 
 ## API Endpoints
 ### `POST /api/dax88/volume`
+Headers:
+```http
+Authorization: Bearer <API_AUTH_TOKEN>
+```
 Body:
 ```json
 { "zone": 1, "volume": 20 }
 ```
 
 ### `POST /api/dax88/power`
+Headers:
+```http
+Authorization: Bearer <API_AUTH_TOKEN>
+```
 Body:
 ```json
 { "zone": 1, "power": "on" }
 ```
 
 ### `POST /api/dax88/source`
+Headers:
+```http
+Authorization: Bearer <API_AUTH_TOKEN>
+```
 Body:
 ```json
 { "zone": 1, "source": 3 }
@@ -98,6 +167,16 @@ Body:
 ### `GET /api/stream/status`
 Fetches `GET [UP2STREAM_BASE_URL]/getPlayerStatus`, decodes `Title`, `Artist`, and `Album` if they are hex-encoded, and returns structured JSON.
 
+## Troubleshooting
+| Issue | Likely cause | Resolution |
+|---|---|---|
+| `401 UNAUTHORIZED` on control endpoint | Missing/invalid `Authorization` header. | Send `Authorization: Bearer <API_AUTH_TOKEN>` and verify token value. |
+| `503 AUTH_NOT_CONFIGURED` on control endpoint | `API_AUTH_TOKEN` missing on server. | Set `API_AUTH_TOKEN` and restart service. |
+| `429 RATE_LIMITED` | Too many control requests from same client + endpoint within rate window. | Reduce call frequency or increase `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW_MS` carefully. |
+| Serial permission denied (`EACCES`, `EPERM`) | User is not in the serial-access group for `/dev/tty*`. | Add your user to the device group (commonly `dialout`), then log out/in. Confirm with `ls -l /dev/ttyUSB0`. |
+| Serial device path unavailable (`ENOENT`) | `DAX88_SERIAL_PATH` points to a non-existent device. | Verify the actual device path (`/dev/ttyUSB0`, `/dev/ttyACM0`, etc.) and update `DAX88_SERIAL_PATH`. |
+| Up2Stream status fetch fails (`ECONNREFUSED`, timeout, 5xx) | Module IP is wrong/unreachable or module is offline. | Confirm `UP2STREAM_BASE_URL`, test `http://<IP>/getPlayerStatus` directly, and verify network/subnet connectivity. |
+
 ## Notes
-- To keep this project secure and maintainable, all control routes validate input ranges and return consistent JSON error shapes.
 - Email integrations should use Postmark per project directive.
+- For higher-assurance deployments, replace or augment bearer token auth with mTLS between proxy and middleware.
