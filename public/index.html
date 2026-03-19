@@ -22,8 +22,10 @@
     <fieldset>
       <legend>Dashboard Login</legend>
       <div><label>Password</label><input id="password" type="password" autocomplete="current-password" /> <button id="loginBtn" onclick="login()">Log In</button></div>
+      <div><label>Bearer Token</label><input id="token" type="password" autocomplete="off" placeholder="Optional manual token" /> <button onclick="applyToken()">Use Token</button> <button onclick="clearToken()">Clear</button></div>
       <div class="status" id="authStatus">Not authenticated.</div>
       <div class="error" id="authError"></div>
+      <small>Token is only kept in-memory for this tab session (not saved to localStorage).</small>
     </fieldset>
 
     <fieldset id="controls" disabled>
@@ -63,9 +65,56 @@
         return payload?.error?.message || payload?.message || fallback;
       }
 
+      function isControlRoute(path) {
+        return path.startsWith('/api/dax88/');
+      }
+
+      function normalizeToken(value) {
+        return (value || "").trim();
+      }
+
+      function setToken(token) {
+        authToken = normalizeToken(token) || null;
+        document.getElementById('token').value = authToken || "";
+        setAuthenticatedState(Boolean(authToken), authToken ? "" : "Log in or provide a bearer token to enable controls.");
+      }
+
+      function applyToken() {
+        setToken(document.getElementById('token').value);
+      }
+
+      function clearToken() {
+        setToken("");
+      }
+
+      function renderApiMessage(payload, status, path) {
+        if (status === 401 || status === 403) {
+          const message = isControlRoute(path)
+            ? 'Unauthorized for control request. Please log in again or provide a valid token.'
+            : 'Request was denied by the server.';
+          document.getElementById('authError').textContent = message;
+          if (isControlRoute(path)) {
+            clearToken();
+          }
+          return;
+        }
+
+        if (status === 503) {
+          document.getElementById('authError').textContent = 'Service temporarily unavailable (503). Hardware or backend may be restarting. Please retry shortly.';
+          return;
+        }
+
+        if (status >= 400) {
+          document.getElementById('authError').textContent = parseErrorPayload(payload, `Request failed with status ${status}.`);
+          return;
+        }
+
+        document.getElementById('authError').textContent = '';
+      }
+
       async function api(path, method = 'GET', body) {
         const headers = { 'Content-Type': 'application/json' };
-        if (authToken) {
+        if (isControlRoute(path) && authToken) {
           headers.Authorization = `Bearer ${authToken}`;
         }
 
@@ -78,21 +127,23 @@
             headers,
             body: body ? JSON.stringify(body) : undefined
           });
-          payload = await response.json();
+
+          const contentType = response.headers.get('content-type') || "";
+          payload = contentType.includes('application/json')
+            ? await response.json()
+            : { message: await response.text() };
         } catch (error) {
-          document.getElementById('output').textContent = JSON.stringify({
+          const networkPayload = {
             success: false,
             error: { code: 'NETWORK_ERROR', message: error.message }
-          }, null, 2);
+          };
+          document.getElementById('output').textContent = JSON.stringify(networkPayload, null, 2);
+          document.getElementById('authError').textContent = `Network request failed: ${error.message}`;
           return;
         }
 
         document.getElementById('output').textContent = JSON.stringify(payload, null, 2);
-
-        if (response.status === 401 || response.status === 403) {
-          authToken = null;
-          setAuthenticatedState(false, 'Authentication failed or expired. Please log in again.');
-        }
+        renderApiMessage(payload, response.status, path);
       }
 
       async function login() {
@@ -113,13 +164,13 @@
             return;
           }
 
-          authToken = payload?.data?.token || null;
-          if (!authToken) {
+          const token = payload?.data?.token || "";
+          if (!token) {
             setAuthenticatedState(false, 'Authentication failed: server did not return a token.');
             return;
           }
 
-          setAuthenticatedState(true);
+          setToken(token);
           document.getElementById('password').value = '';
         } catch (error) {
           setAuthenticatedState(false, `Login request failed: ${error.message}`);
@@ -153,7 +204,7 @@
         return api('/api/stream/status');
       }
 
-      setAuthenticatedState(false, 'Log in to enable controls.');
+      setAuthenticatedState(false, 'Log in or provide a bearer token to enable controls.');
     </script>
   </body>
 </html>
