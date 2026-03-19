@@ -1,6 +1,5 @@
 const express = require('express');
 const path = require('path');
-const axios = require('axios');
 const {
   buildPowerCommand,
   buildSourceCommand,
@@ -20,9 +19,12 @@ const {
 } = require('./src/api/security');
 const {
   validatePowerPayload,
-  validateUp2StreamBaseUrl,
   validateVolume
 } = require('./src/api/validators');
+const {
+  fetchPlayerStatus,
+  StreamStatusServiceError
+} = require('./src/stream/statusService');
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
@@ -140,9 +142,8 @@ function parseActiveZones() {
     .filter((zone) => /^0[1-8]$/.test(zone));
 }
 
-const STREAM_UNKNOWN_SENTINEL = 'UNKNOWN';
-const streamTimeoutMs = Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10);
-let streamEndpoint = null;
+const streamEndpoint = `${UP2STREAM_BASE_URL}/getPlayerStatus`;
+const streamCacheTtlMs = Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10);
 const systemState = {
   stream: {
     title: '',
@@ -153,90 +154,36 @@ const systemState = {
   }
 };
 
-try {
-  const baseUrl = validateUp2StreamBaseUrl(UP2STREAM_BASE_URL);
-  streamEndpoint = `${baseUrl}/getPlayerStatus`;
-} catch (error) {
-  systemState.stream = {
-    ...systemState.stream,
-    error: error.message || 'UP2Stream is not configured',
-    source: 'cache',
-    fetchedAt: new Date().toISOString()
-  };
-  console.warn('[server] stream polling disabled:', systemState.stream.error);
-}
-
-function safeDecodeHexField(value, fallback = '') {
-  if (value == null) {
-    return fallback;
-  }
-
-  if (typeof value !== 'string') {
-    return fallback;
-  }
-
-  const normalized = value.trim();
-  if (!normalized || normalized.toUpperCase() === STREAM_UNKNOWN_SENTINEL) {
-    return fallback;
-  }
-
-  const compact = normalized.replace(/\s+/g, '');
-  if (!compact || compact.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(compact)) {
-    return fallback;
-  }
-
-  try {
-    const decoded = Buffer.from(compact, 'hex').toString('utf8').replace(/\0/g, '').trim();
-    if (decoded.includes('\uFFFD')) {
-      return fallback;
-    }
-    return decoded;
-  } catch {
-    return fallback;
-  }
-}
-
 function formatStreamError(error) {
   const rawMessage = (error && error.message) ? error.message : 'metadata poll failed';
   return rawMessage.split('\n')[0].slice(0, 160);
 }
 
+function applyStreamStatusToSystemState(streamStatus) {
+  systemState.stream = {
+    title: streamStatus.metadata?.Title || '',
+    artist: streamStatus.metadata?.Artist || '',
+    album: streamStatus.metadata?.Album || '',
+    source: streamStatus.source,
+    fetchedAt: streamStatus.fetchedAt,
+    stale: Boolean(streamStatus.stale),
+    expiresAt: streamStatus.expiresAt || null,
+    error: streamStatus.error || undefined
+  };
+  return systemState.stream;
+}
+
 async function pollStreamMetadataAndUpdateCache() {
-  if (!streamEndpoint) {
-    systemState.stream = {
-      ...systemState.stream,
-      source: 'cache',
-      fetchedAt: new Date().toISOString(),
-      error: systemState.stream.error || 'UP2Stream endpoint not configured'
-    };
-    return systemState.stream;
-  }
-
   try {
-    const response = await axios.get(streamEndpoint, { timeout: streamTimeoutMs });
-    if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
-      throw new Error(`Unexpected response (${response.status})`);
-    }
-
-    const title = safeDecodeHexField(response.data.Title, systemState.stream.title);
-    const artist = safeDecodeHexField(response.data.Artist, systemState.stream.artist);
-    const album = safeDecodeHexField(response.data.Album, systemState.stream.album);
-
-    systemState.stream = {
-      title,
-      artist,
-      album,
-      source: 'live',
-      fetchedAt: new Date().toISOString()
-    };
-
-    return systemState.stream;
+    const streamStatus = await fetchPlayerStatus({ cacheTtlMs: streamCacheTtlMs });
+    return applyStreamStatusToSystemState(streamStatus);
   } catch (error) {
+    const isKnownStatusError = error instanceof StreamStatusServiceError;
     systemState.stream = {
       ...systemState.stream,
       source: 'cache',
-      fetchedAt: new Date().toISOString(),
-      error: formatStreamError(error)
+      stale: true,
+      error: isKnownStatusError ? error.reason : formatStreamError(error)
     };
     return systemState.stream;
   }
@@ -687,9 +634,10 @@ app.use('/api/dax88', controlRouter);
 /**
  * GET /api/stream/status
  */
-app.get('/api/stream/status', (_req, res) => {
+app.get('/api/stream/status', async (_req, res) => {
   try {
-    const stream = systemState.stream;
+    const streamStatus = await fetchPlayerStatus({ cacheTtlMs: streamCacheTtlMs });
+    const stream = applyStreamStatusToSystemState(streamStatus);
     return ok(res, {
       title: stream.title,
       artist: stream.artist,
@@ -698,9 +646,21 @@ app.get('/api/stream/status', (_req, res) => {
       endpoint: streamEndpoint,
       source: stream.source,
       fetchedAt: stream.fetchedAt,
-      error: stream.error
+      error: stream.error,
+      stale: Boolean(stream.stale),
+      expiresAt: stream.expiresAt || null
     });
   } catch (error) {
+    if (error instanceof StreamStatusServiceError) {
+      return res.status(error.statusCode || 503).json({
+        success: false,
+        error: {
+          code: error.code,
+          message: 'Unable to get stream status',
+          details: error.reason
+        }
+      });
+    }
     if (error.message.includes('UP2STREAM_BASE_URL')) {
       return badRequest(res, error.message);
     }
