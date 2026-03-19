@@ -137,6 +137,42 @@
         liveStatus.className = isError ? 'status error' : 'status';
       }
 
+
+      function normalizeZoneId(rawZoneId) {
+        const numericZone = Number.parseInt(rawZoneId, 10);
+        if (Number.isNaN(numericZone)) {
+          return null;
+        }
+        return String(numericZone).padStart(2, '0');
+      }
+
+      function syncControlsFromLiveZoneState() {
+        const selectedZoneId = normalizeZoneId(document.getElementById('zone').value);
+        if (!selectedZoneId || !liveState?.zones?.[selectedZoneId]) {
+          return;
+        }
+
+        const zoneState = liveState.zones[selectedZoneId];
+        const volumeInput = document.getElementById('volume');
+        const sourceInput = document.getElementById('source');
+        const powerSelect = document.getElementById('power');
+
+        const nextVolume = Number.parseInt(zoneState.volume, 10);
+        if (Number.isInteger(nextVolume) && document.activeElement !== volumeInput && Number.parseInt(volumeInput.value, 10) !== nextVolume) {
+          volumeInput.value = String(nextVolume);
+        }
+
+        const nextSource = Number.parseInt(zoneState.source, 10);
+        if (Number.isInteger(nextSource) && document.activeElement !== sourceInput && Number.parseInt(sourceInput.value, 10) !== nextSource) {
+          sourceInput.value = String(nextSource);
+        }
+
+        const nextPower = zoneState.power ? 'on' : 'off';
+        if (document.activeElement !== powerSelect && powerSelect.value !== nextPower) {
+          powerSelect.value = nextPower;
+        }
+      }
+
       function connectStateStream() {
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
@@ -159,6 +195,7 @@
             zones: payload.zones || liveState.zones,
             hardware: payload.hardware || liveState.hardware
           };
+          syncControlsFromLiveZoneState();
           renderLiveState();
         };
 
@@ -261,6 +298,7 @@
         return api('/api/stream/status');
       }
 
+      document.getElementById('zone').addEventListener('input', syncControlsFromLiveZoneState);
       setAuthenticatedState(false, 'Log in or provide a bearer token to enable controls.');
       connectStateStream();
     </script>

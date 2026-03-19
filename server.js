@@ -682,6 +682,7 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
   sseClients.add(res);
@@ -697,6 +698,7 @@ app.get('/api/state/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
   stateStreamClients.add(res);
@@ -855,6 +857,22 @@ const dax88PollingLoop = createResilientPollingLoop({
   }
 });
 
+async function runColdStartSweep() {
+  if (process.env.DAX88_SERIAL_DISABLED === 'true') {
+    console.warn('[server] skipping cold start sweep because DAX88_SERIAL_DISABLED=true');
+    return;
+  }
+
+  try {
+    const result = await zoneMonitor.pollOnce();
+    const polledZones = Object.keys(result.zoneStates || {}).length;
+    console.info(`[server] cold start sweep complete: ${polledZones} zones initialized, ${result.events.length} deltas emitted`);
+  } catch (error) {
+    console.warn('[server] cold start sweep failed:', error.message);
+  }
+}
+
+
 async function startAgents() {
   try {
     streamPollingLoop.start();
@@ -914,6 +932,11 @@ async function shutdown(signal) {
   }
   stateStreamClients.clear();
 
+  if (!server) {
+    process.exit(0);
+    return;
+  }
+
   server.close((error) => {
     if (error) {
       console.error('[server] http server close failed:', error.message);
@@ -924,11 +947,19 @@ async function shutdown(signal) {
   });
 }
 
-const server = app.listen(port, () => {
+let server = null;
+
+async function bootstrap() {
   logStartupConfig();
-  console.log(`Audio middleware listening on http://localhost:${port}`);
-  void startAgents();
-});
+  await runColdStartSweep();
+
+  server = app.listen(port, () => {
+    console.log(`Audio middleware listening on http://localhost:${port}`);
+    void startAgents();
+  });
+}
+
+void bootstrap();
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

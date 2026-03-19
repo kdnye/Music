@@ -75,6 +75,7 @@ Optional runtime flags:
 - `UP2STREAM_CACHE_TTL_MS=20000` to control how long cached metadata is considered fresh before being marked stale.
 - `DAX88_INTER_WRITE_DELAY_MS=50` and `DAX88_QUEUE_TASK_TIMEOUT_MS=2500` to tune global serial FIFO queue pacing/timeouts.
 - Polling loops include built-in retry backoff at 10s, 30s, and 60s after repeated failures; hardware is marked offline after 3 consecutive failures.
+- On process boot, the service performs an immediate DAX88 cold-start sweep (`?01`..`?08`) before opening the HTTP listener so `/api/state` and SSE start with populated zone cache.
 
 > Multiple Up2Stream IPs: this service currently reads one `UP2STREAM_BASE_URL` per process. For multiple modules, run one process per module with different `UP2STREAM_BASE_URL` and (if needed) different `PORT`.
 
@@ -160,6 +161,42 @@ TLS termination boundary:
   - loopback/private interface on same host, or
   - mTLS on internal network if crossing hosts/VLANs.
 - Device-side protocols (serial, legacy module HTTP APIs) may be non-TLS; isolate these on trusted internal segments and firewall aggressively.
+
+
+## Reverse Proxy and Process Hardening
+
+### Nginx SSE tuning (required)
+If Nginx fronts this service, disable proxy buffering for `/api/state/stream` so SSE messages are delivered immediately.
+
+```nginx
+location /api/state/stream {
+    proxy_pass http://localhost:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+
+    # Critical for Server-Sent Events
+    proxy_buffering off;
+    chunked_transfer_encoding off;
+    proxy_read_timeout 24h;
+}
+```
+
+After editing `/etc/nginx/sites-available/tucsonmusic`, run:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### PM2 log rotation (required for long-running agents)
+Prevent unbounded `out.log` / `err.log` growth by enabling PM2 log rotation:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+```
 
 ## API Endpoints
 ### `POST /api/auth/login`
