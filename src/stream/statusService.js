@@ -4,7 +4,11 @@ const { validateUp2StreamBaseUrl } = require('../api/validators');
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 
 function decodeHexToAscii(hexValue, options = {}) {
-  const { fallback = hexValue, invalidUtf8Fallback = fallback } = options;
+  const {
+    fallback = hexValue,
+    invalidUtf8Fallback = fallback,
+    onDecodeError
+  } = options;
 
   if (hexValue == null) {
     return hexValue;
@@ -29,23 +33,36 @@ function decodeHexToAscii(hexValue, options = {}) {
 
   try {
     const decoded = Buffer.from(cleaned, 'hex').toString('utf8');
+    const withoutNulls = decoded.replace(/\0/g, '');
 
     // U+FFFD indicates invalid UTF-8 sequences were encountered.
-    if (decoded.includes('\uFFFD')) {
+    if (withoutNulls.includes('\uFFFD')) {
+      onDecodeError?.('invalid-utf8');
       return invalidUtf8Fallback;
     }
 
-    return decoded;
+    return withoutNulls;
   } catch {
+    onDecodeError?.('decode-failed');
     return fallback;
   }
 }
 
 function decodeMetadata(rawPayload) {
   const payload = { ...rawPayload };
+  const decodeErrors = [];
 
   for (const field of HEX_FIELDS) {
-    payload[field] = decodeHexToAscii(payload[field]);
+    payload[field] = decodeHexToAscii(payload[field], {
+      onDecodeError: (error) => {
+        decodeErrors.push({ field, error });
+      }
+    });
+  }
+
+  if (decodeErrors.length) {
+    payload.decodeError = true;
+    payload.decodeErrors = decodeErrors;
   }
 
   return payload;
