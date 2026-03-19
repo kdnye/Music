@@ -2,6 +2,25 @@ const axios = require('axios');
 const { validateUp2StreamBaseUrl } = require('../api/validators');
 
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
+const DEFAULT_TIMEOUT_MS = 4000;
+const DEFAULT_CACHE_TTL_MS = 20000;
+
+class StreamStatusServiceError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'StreamStatusServiceError';
+    this.code = options.code || 'STREAM_STATUS_ERROR';
+    this.statusCode = options.statusCode || 502;
+    this.reason = options.reason || message;
+    this.details = options.details || undefined;
+  }
+}
+
+let lastSuccessfulCache = {
+  metadata: null,
+  fetchedAt: null,
+  expiresAt: null
+};
 
 function decodeHexToAscii(hexValue, options = {}) {
   const {
@@ -68,23 +87,81 @@ function decodeMetadata(rawPayload) {
   return payload;
 }
 
-async function fetchPlayerStatus() {
-  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
-  const url = `${baseUrl}/getPlayerStatus`;
-  const { data } = await axios.get(url, {
-    timeout: Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10)
-  });
+function getCacheTtlMs(cacheTtlMs) {
+  const parsed = Number.parseInt(
+    `${cacheTtlMs ?? process.env.UP2STREAM_CACHE_TTL_MS ?? DEFAULT_CACHE_TTL_MS}`,
+    10
+  );
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_CACHE_TTL_MS;
+}
+
+function buildCacheResponse(reason, ttlMs) {
+  if (!lastSuccessfulCache.metadata || !lastSuccessfulCache.fetchedAt) {
+    throw new StreamStatusServiceError('No cached stream metadata available', {
+      code: 'STREAM_STATUS_UNAVAILABLE',
+      statusCode: 503,
+      reason,
+      details: { ttlMs }
+    });
+  }
+
+  const now = Date.now();
+  const expiresAtMs = lastSuccessfulCache.expiresAt ? new Date(lastSuccessfulCache.expiresAt).getTime() : null;
+  const stale = expiresAtMs != null ? now > expiresAtMs : false;
 
   return {
-    endpoint: url,
-    raw: data,
-    decoded: decodeMetadata(data),
-    fetchedAt: new Date().toISOString()
+    metadata: lastSuccessfulCache.metadata,
+    source: 'cache',
+    fetchedAt: lastSuccessfulCache.fetchedAt,
+    stale,
+    expiresAt: lastSuccessfulCache.expiresAt,
+    error: reason
   };
+}
+
+async function fetchPlayerStatus(options = {}) {
+  const { cacheTtlMs } = options;
+  const ttlMs = getCacheTtlMs(cacheTtlMs);
+  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
+  const url = `${baseUrl}/getPlayerStatus`;
+  try {
+    const response = await axios.get(url, {
+      timeout: Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || `${DEFAULT_TIMEOUT_MS}`, 10)
+    });
+
+    if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
+      return buildCacheResponse(`Unexpected response (${response.status})`, ttlMs);
+    }
+
+    const metadata = decodeMetadata(response.data);
+    if (metadata.decodeError) {
+      return buildCacheResponse('Failed to decode metadata payload', ttlMs);
+    }
+
+    const fetchedAt = new Date().toISOString();
+    const expiresAt = ttlMs > 0 ? new Date(Date.now() + ttlMs).toISOString() : null;
+    lastSuccessfulCache = {
+      metadata,
+      fetchedAt,
+      expiresAt
+    };
+
+    return {
+      metadata,
+      source: 'live',
+      fetchedAt,
+      expiresAt,
+      stale: false
+    };
+  } catch (error) {
+    return buildCacheResponse(error.message || 'Failed to fetch stream metadata', ttlMs);
+  }
 }
 
 module.exports = {
   decodeHexToAscii,
   decodeMetadata,
-  fetchPlayerStatus
+  fetchPlayerStatus,
+  getCacheTtlMs,
+  StreamStatusServiceError
 };
