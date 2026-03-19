@@ -58,7 +58,8 @@ function parseActiveZones() {
 const streamPoller = (() => {
   try {
     return createStreamPoller({
-      deviceIp: process.env.UP2STREAM_BASE_URL
+      deviceIp: process.env.UP2STREAM_BASE_URL,
+      cacheTtlMs: Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10)
     });
   } catch (error) {
     console.warn('[server] stream poller disabled:', error.message);
@@ -70,7 +71,10 @@ const streamPoller = (() => {
         metadata: { title: '', artist: '', album: '' },
         source: 'cache',
         stale: true,
+        staleReason: 'poller-disabled',
         fetchedAt: null,
+        cacheTtlMs: Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10),
+        cacheAgeMs: null,
         error: error.message
       })
     };
@@ -264,7 +268,10 @@ app.get('/api/stream/status', (_req, res) => {
       endpoint: status.endpoint,
       source: status.source,
       stale: status.stale,
+      staleReason: status.staleReason,
       fetchedAt: status.fetchedAt,
+      cacheTtlMs: status.cacheTtlMs,
+      cacheAgeMs: status.cacheAgeMs,
       error: status.error
     });
   } catch (error) {

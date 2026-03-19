@@ -70,6 +70,7 @@ DAX88_GROUPS_FILE=./config/groups.json
 Optional runtime flags:
 - `DAX88_SERIAL_DISABLED=true` for development without physical serial hardware.
 - `UP2STREAM_TIMEOUT_MS=4000` to tune metadata polling request timeout.
+- `UP2STREAM_CACHE_TTL_MS=20000` to control how long cached metadata is considered fresh before being marked stale.
 
 > Multiple Up2Stream IPs: this service currently reads one `UP2STREAM_BASE_URL` per process. For multiple modules, run one process per module with different `UP2STREAM_BASE_URL` and (if needed) different `PORT`.
 
@@ -239,7 +240,7 @@ Returns per-zone results and aggregate summary:
 ```
 
 ### `GET /api/stream/status`
-Fetches `GET [UP2STREAM_BASE_URL]/getPlayerStatus`, decodes `Title`, `Artist`, and `Album` if they are hex-encoded, and returns structured JSON.
+Fetches `GET [UP2STREAM_BASE_URL]/getPlayerStatus`, decodes `Title`, `Artist`, and `Album` if they are hex-encoded, and returns structured JSON. If polling or decode fails, the endpoint serves the last known-good cached payload with stale indicators instead of hard-failing where possible.
 
 ## Troubleshooting
 | Issue | Likely cause | Resolution |
