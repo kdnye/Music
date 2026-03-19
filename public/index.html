@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tucson Music - Audio Dashboard</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; max-width: 900px; }
+      fieldset { margin-bottom: 1rem; }
+      label { display: inline-block; min-width: 90px; }
+      input, select, button { margin: 0.25rem 0; }
+      pre { background: #111; color: #9df09d; padding: 1rem; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Office Audio Control</h1>
+
+    <fieldset>
+      <legend>DAX88 Zone Control</legend>
+      <div><label>Zone</label><input id="zone" type="number" min="1" max="8" value="1" /></div>
+      <div><label>Volume</label><input id="volume" type="number" min="0" max="38" value="15" /> <button onclick="setVolume()">Set Volume</button></div>
+      <div>
+        <label>Power</label>
+        <select id="power"><option value="on">On</option><option value="off">Off</option></select>
+        <button onclick="setPower()">Set Power</button>
+      </div>
+      <div><label>Source</label><input id="source" type="number" min="1" max="8" value="1" /> <button onclick="setSource()">Set Source</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Up2Stream Status</legend>
+      <button onclick="getStreamStatus()">Refresh Status</button>
+    </fieldset>
+
+    <pre id="output">Ready.</pre>
+
+    <script>
+      async function api(path, method = 'GET', body) {
+        const response = await fetch(path, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: body ? JSON.stringify(body) : undefined
+        });
+        const json = await response.json();
+        document.getElementById('output').textContent = JSON.stringify(json, null, 2);
+      }
+
+      function setVolume() {
+        return api('/api/dax88/volume', 'POST', {
+          zone: Number(document.getElementById('zone').value),
+          volume: Number(document.getElementById('volume').value)
+        });
+      }
+
+      function setPower() {
+        return api('/api/dax88/power', 'POST', {
+          zone: Number(document.getElementById('zone').value),
+          power: document.getElementById('power').value
+        });
+      }
+
+      function setSource() {
+        return api('/api/dax88/source', 'POST', {
+          zone: Number(document.getElementById('zone').value),
+          source: Number(document.getElementById('source').value)
+        });
+      }
+
+      function getStreamStatus() {
+        return api('/api/stream/status');
+      }
+    </script>
+  </body>
+</html>
