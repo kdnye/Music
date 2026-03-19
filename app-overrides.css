@@ -1,0 +1,510 @@
+.fsi-navbar .fsi-container {
+  gap: 0.75rem;
+}
+
+.fsi-brand {
+  max-width: 13.5rem;
+  line-height: 1.15;
+}
+
+.fsi-help {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-weight: 700;
+  color: var(--nav-link);
+  background: color-mix(in oklab, var(--nav-hover-bg) 78%, transparent);
+  border: 1px solid var(--color-border);
+}
+
+.fsi-help:hover,
+.fsi-help:focus-visible {
+  background: var(--nav-hover-bg);
+  outline: none;
+}
+
+.fsi-account-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.fsi-nav-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 9999px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+}
+
+.fsi-nav-user-name {
+  max-width: 9.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--nav-link);
+}
+
+.fsi-card {
+  width: min(100%, 72rem);
+  margin-inline: auto;
+}
+
+.fsi-card > p {
+  margin-top: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.fsi-card--narrow {
+  width: min(100%, 34rem);
+}
+
+/* Update existing Load Board container */
+.fsi-container--load-board {
+  max-width: 100%; /* Allow full width */
+  padding-inline: clamp(0.75rem, 1.5vw, 1.5rem);
+}
+
+.fsi-card--load-board {
+  width: 100%; /* Take up available space */
+  overflow-x: auto; /* Ensure horizontal scrolling on the card itself if needed */
+}
+
+/* Add a new container class for POD History */
+.fsi-container--fluid {
+  max-width: 100%;
+  padding-inline: clamp(0.75rem, 1.5vw, 1.5rem);
+}
+
+.fsi-card--fluid {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.fsi-form-grid label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+.fsi-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.fsi-form-actions .fsi-primary-btn,
+.fsi-form-actions .fsi-secondary-btn {
+  min-height: 2.45rem;
+}
+
+.fsi-status-line {
+  margin-top: 0.35rem;
+  font-weight: 600;
+}
+
+.fsi-flashes {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.fsi-flash {
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.fsi-flash-success {
+  border-color: color-mix(in oklab, var(--fsi-teal) 40%, transparent);
+}
+
+[data-theme='dark'] .fsi-flash-success,
+[data-bs-theme='dark'] .fsi-flash-success {
+  border-color: rgba(94, 234, 212, 0.4);
+}
+
+.fsi-form-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.fsi-input {
+  width: 100%;
+  margin-top: 0.35rem;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  border-radius: 0.55rem;
+  min-height: 2.2rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.fsi-input:focus {
+  outline: 2px solid var(--btn-primary-bg);
+  border-color: transparent;
+}
+
+.fsi-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fsi-profile-header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.fsi-profile-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 0.75rem;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+}
+
+/* History Upload Bubbles */
+.fsi-summary-success {
+  margin-bottom: 2rem;
+  padding: 1rem;
+  border-left: 4px solid #16a34a;
+  background: #f0fdf4;
+  color: #16a34a;
+}
+.fsi-summary-danger {
+  padding: 1rem;
+  border-left: 4px solid #dc2626;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.fsi-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.fsi-table {
+  width: 100%;
+  text-align: left;
+  border-collapse: collapse;
+  min-width: 680px;
+}
+
+.fsi-table th,
+.fsi-table td {
+  padding: 0.75rem;
+}
+
+.fsi-load-board-wrap {
+  width: 100%;
+  max-width: 100%;
+  max-height: min(68vh, 820px);
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  direction: rtl;
+}
+
+.fsi-load-board-table {
+  min-width: 1460px;
+  direction: ltr;
+}
+
+.fsi-load-board-table th,
+.fsi-load-board-table td {
+  padding: 0.95rem 1.1rem;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.fsi-load-board-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface, #ffffff);
+}
+
+.fsi-load-board-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--color-border) 24%, transparent);
+}
+
+.fsi-load-board-table td.fsi-entity-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 300px;
+  white-space: normal;
+}
+
+.fsi-load-board-table td .fsi-entity-address {
+  color: color-mix(in srgb, var(--color-text, #111827) 62%, white);
+}
+
+.pod-event-fieldset {
+  margin-bottom: 1.5rem;
+}
+
+
+.pod-event-card {
+  width: min(100%, calc(100vw - 20px), 46rem);
+}
+
+.pod-event-form {
+  display: grid;
+  justify-items: center;
+}
+
+.pod-event-form .pod-event-fieldset,
+.pod-event-form .fsi-form-actions,
+.pod-event-form .pod-status-message {
+  width: min(100%, calc(100vw - 40px), 36rem);
+  margin-inline: auto;
+}
+
+.pod-event-form .pod-event-fieldset > * {
+  width: 100%;
+}
+
+.pod-event-form .pod-signature-shell,
+.pod-event-form .pod-qr-reader {
+  margin-inline: auto;
+}
+
+.pod-qr-reader {
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
+  overflow: hidden;
+}
+
+.pod-qr-reader video {
+  width: 100% !important;
+  max-height: clamp(220px, 46vh, 340px);
+  object-fit: cover;
+}
+
+.pod-qr-reader #qr-reader__scan_region {
+  min-height: 0 !important;
+}
+
+.pod-qr-reader #qr-reader__dashboard_section {
+  padding: 0.7rem;
+}
+
+.pod-qr-reader select,
+.pod-qr-reader button {
+  max-width: 100%;
+}
+
+.pod-signature-shell {
+  width: 100%;
+  max-width: 520px;
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
+  overflow: hidden;
+  background: #fff;
+}
+
+.pod-signature-canvas {
+  width: 100%;
+  height: 190px;
+  touch-action: none;
+}
+
+.pod-clear-signature {
+  margin-top: 0.5rem;
+  width: fit-content;
+}
+
+.pod-status-message {
+  margin-top: 0.9rem;
+  font-weight: 700;
+}
+[data-theme='dark'] .fsi-summary-success,
+[data-bs-theme='dark'] .fsi-summary-success {
+  background: rgba(22, 163, 74, 0.15);
+  border-color: #4ade80;
+  color: #4ade80;
+}
+[data-theme='dark'] .fsi-summary-danger,
+[data-bs-theme='dark'] .fsi-summary-danger {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: #f87171;
+  color: #f87171;
+}
+
+@media (max-width: 768px) {
+  .fsi-container--load-board {
+    max-width: 100%;
+    padding-inline: 1rem;
+  }
+
+  .fsi-navbar .fsi-container {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .fsi-brand {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+
+  .fsi-nav-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .fsi-account-menu {
+    margin-left: auto;
+  }
+
+  .fsi-container {
+    padding: 1rem;
+  }
+
+  .fsi-card {
+    padding: 1rem;
+  }
+
+  .fsi-form-actions .fsi-primary-btn,
+  .fsi-form-actions .fsi-secondary-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .fsi-display {
+    font-size: 1.55rem;
+    letter-spacing: 0.035em;
+  }
+
+  .fsi-nav-actions {
+    flex-wrap: nowrap;
+  }
+
+  .fsi-table {
+    min-width: 620px;
+  }
+
+  .fsi-table th,
+  .fsi-table td {
+    padding: 0.6rem;
+    font-size: 0.92rem;
+    white-space: nowrap;
+  }
+
+  .pod-qr-reader {
+    max-width: min(100%, 250px);
+  }
+
+  .pod-qr-reader video {
+    max-height: clamp(180px, 38vh, 260px);
+  }
+
+  .pod-qr-reader #qr-reader__dashboard_section_csr {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .pod-qr-reader #qr-reader__dashboard_section_csr > * {
+    width: 100%;
+  }
+
+  .pod-signature-shell {
+    max-width: 100%;
+  }
+
+  .pod-signature-canvas {
+    height: clamp(120px, 22vh, 165px);
+  }
+  /* Add this inside your @media (max-width: 768px) block */
+  .fsi-navbar .fsi-container {
+    flex-wrap: nowrap; /* Prevent stacking */
+    justify-content: space-between;
+  }
+  
+  .fsi-brand {
+    font-size: 1.1rem; /* Scale down brand text */
+    flex: 0 1 auto;
+  }
+  
+  .fsi-nav-actions {
+    width: auto;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 560px) {
+  .fsi-nav-user-name {
+    display: none;
+  }
+
+  .fsi-secondary-btn {
+    padding-inline: 0.8rem;
+  }
+
+  .pod-qr-reader {
+    max-width: min(100%, 210px);
+  }
+
+  .pod-qr-reader video {
+    max-height: clamp(160px, 32vh, 220px);
+  }
+
+  .pod-signature-canvas {
+    height: 130px;
+  }
+}
+
+/* Help Page Documentation Cards */
+.fsi-help-card {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+    background-color: var(--surface-hover, rgba(128, 128, 128, 0.05));
+}
+.fsi-help-card h4 {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+}
+
+/* Accent Borders */
+.fsi-help-card--pickup { border-left: 4px solid #607d8b; }
+.fsi-help-card--origin { border-left: 4px solid #1976d2; }
+.fsi-help-card--dest { border-left: 4px solid #607d8b; }
+.fsi-help-card--delivery { border-left: 4px solid #388e3c; }
+
+.fsi-help-warning {
+    padding: 1rem;
+    border-left: 4px solid #d32f2f;
+    background-color: rgba(211, 47, 47, 0.1);
+    border-radius: 4px;
+    margin-bottom: 1.5rem;
+}
+
+/* Brighten Accents in Dark Mode */
+[data-theme="dark"] .fsi-help-card--origin { border-left-color: #64b5f6; }
+[data-theme="dark"] .fsi-help-card--delivery { border-left-color: #81c784; }
+[data-theme="dark"] .fsi-help-warning { 
+    border-left-color: #ef5350; 
+    background-color: rgba(239, 83, 80, 0.1); 
+}

@@ -1,0 +1,343 @@
+:root {
+  /* Base Brand Colors */
+  --fsi-navy: #1c3564;
+  --fsi-gold: #cfac4e;
+  --fsi-teal: #005e73;
+
+  /* Dynamic Theme Variables (Light Mode) */
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-text: #1f2937;
+  --color-border: rgba(66, 73, 91, 0.22);
+
+  /* Buttons */
+  --btn-primary-bg: var(--fsi-navy);
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #2d6fb7;
+  --btn-secondary-bg: #ecf0f8;
+  --btn-secondary-text: var(--fsi-navy);
+  --btn-secondary-border: rgba(28, 53, 100, 0.2);
+  --btn-secondary-hover-bg: var(--fsi-navy);
+  --btn-secondary-hover-text: #ffffff;
+
+  /* Navbar */
+  --nav-bg: #ffffff;
+  --nav-link: var(--fsi-navy);
+  --nav-hover-bg: #ecf0f8;
+
+  /* Utilities */
+  --radius-pill: 9999px;
+  --shadow-md: 0 8px 22px rgba(28, 53, 100, 0.12);
+  --space-6: 1.5rem;
+}
+
+[data-theme='dark'],
+[data-bs-theme='dark'] {
+  /* Dynamic Theme Variables (Dark Mode) */
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-text: #e2e8f0;
+  --color-border: #334155;
+
+  /* Buttons */
+  --btn-primary-bg: #2563eb;
+  --btn-primary-text: #eff6ff;
+  --btn-primary-hover: #3b82f6;
+  --btn-secondary-bg: rgba(147, 197, 253, 0.16);
+  --btn-secondary-text: #dbeafe;
+  --btn-secondary-border: rgba(147, 197, 253, 0.55);
+  --btn-secondary-hover-bg: rgba(147, 197, 253, 0.28);
+  --btn-secondary-hover-text: #ffffff;
+
+  /* Navbar */
+  --nav-bg: #1e293b;
+  --nav-link: #e2e8f0;
+  --nav-hover-bg: #334155;
+
+  /* Utilities */
+  --shadow-md: 0 4px 12px rgba(2, 6, 23, 0.5);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Roboto, system-ui, sans-serif;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.fsi-container { max-width: 1100px; margin: 0 auto; padding: var(--space-6); }
+.fsi-display {
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fsi-navbar {
+  background: var(--nav-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+.fsi-navbar .fsi-container { display: flex; justify-content: space-between; align-items: center; }
+.fsi-brand { color: var(--nav-link); text-decoration: none; font-weight: 700; }
+.fsi-nav-actions { display: flex; gap: 0.75rem; align-items: center; }
+
+.fsi-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  color: var(--color-text);
+}
+
+.fsi-primary-btn,
+.fsi-secondary-btn {
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fsi-primary-btn {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+}
+.fsi-primary-btn:hover {
+  background: var(--btn-primary-hover);
+}
+
+.fsi-secondary-btn {
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+  border-color: var(--btn-secondary-border);
+}
+.fsi-secondary-btn:hover {
+  background: var(--btn-secondary-hover-bg);
+  color: var(--btn-secondary-hover-text);
+}
+
+.fsi-badge-success {
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in oklab, var(--fsi-teal) 50%, transparent);
+  color: var(--fsi-teal);
+  padding: 0.15rem 0.5rem;
+}
+[data-theme='dark'] .fsi-badge-success,
+[data-bs-theme='dark'] .fsi-badge-success {
+  color: #5eead4;
+  border-color: rgba(94, 234, 212, 0.4);
+}
+
+.fsi-account-menu { position: relative; }
+
+.fsi-account-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  min-width: 12rem;
+  margin: 0;
+  padding: 0.35rem 0;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-md);
+}
+
+.fsi-account-menu-list a {
+  display: block;
+  width: 100%;
+  text-decoration: none;
+  color: var(--color-text);
+  padding: 0.5rem 0.75rem;
+}
+
+.fsi-account-menu-list a:hover,
+.fsi-account-menu-list a:focus-visible {
+  background: var(--nav-hover-bg);
+  color: var(--nav-link);
+  outline: none;
+}
+
+.fsi-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fsi-admin-table th,
+.fsi-admin-table td {
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.65rem;
+  white-space: nowrap;
+}
+
+.fsi-admin-table select {
+  min-width: 10rem;
+}
+
+.fsi-load-board-actions {
+  margin-bottom: 0.75rem;
+}
+
+.fsi-load-status-legend {
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.fsi-load-status-legend__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.fsi-load-status-legend__list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+}
+
+.fsi-status-badge {
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+
+.status-awaiting-pickup {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.status-at-origin-airport {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  color: #075985;
+}
+
+.status-in-air {
+  background: #ede9fe;
+  border-color: #c4b5fd;
+  color: #5b21b6;
+}
+
+.status-at-destination-airport {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.status-out-for-delivery {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.status-delivered {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+[data-theme='dark'] .status-awaiting-pickup,
+[data-bs-theme='dark'] .status-awaiting-pickup {
+  background: #334155;
+  border-color: #64748b;
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .status-at-origin-airport,
+[data-bs-theme='dark'] .status-at-origin-airport {
+  background: #082f49;
+  border-color: #0ea5e9;
+  color: #bae6fd;
+}
+
+[data-theme='dark'] .status-in-air,
+[data-bs-theme='dark'] .status-in-air {
+  background: #312e81;
+  border-color: #8b5cf6;
+  color: #ddd6fe;
+}
+
+[data-theme='dark'] .status-at-destination-airport,
+[data-bs-theme='dark'] .status-at-destination-airport {
+  background: #78350f;
+  border-color: #f59e0b;
+  color: #fde68a;
+}
+
+[data-theme='dark'] .status-out-for-delivery,
+[data-bs-theme='dark'] .status-out-for-delivery {
+  background: #14532d;
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+
+[data-theme='dark'] .status-delivered,
+[data-bs-theme='dark'] .status-delivered {
+  background: #064e3b;
+  border-color: #10b981;
+  color: #a7f3d0;
+}
+
+/* --- Stacked Layout logic for Shipper/Consignee Columns --- */
+.fsi-header-stack, .fsi-data-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    line-height: 1.2;
+    text-align: left;
+}
+
+.fsi-header-stack__secondary, .fsi-data-stack__secondary {
+    font-size: 0.825em;
+    font-weight: normal;
+    color: var(--color-text);
+    opacity: 0.65;
+}
+
+.fsi-column--stacked {
+    min-width: 200px;
+    max-width: 300px;
+    word-wrap: break-word;
+}
+
+/* --- Table Alignment and Structure --- */
+.fsi-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+}
+
+.fsi-table th,
+.fsi-table td {
+    padding: 0.75rem 0.5rem;
+    vertical-align: top; /* Critical for stacked text alignment */
+    border-bottom: 1px solid var(--color-border);
+    text-align: left;
+}
+
+.fsi-load-board-table thead th {
+    background-color: var(--color-surface);
+    border-bottom: 2px solid var(--fsi-navy);
+}
+
+.fsi-table tbody tr:hover {
+    background-color: var(--nav-hover-bg);
+}
+
+.fsi-entity-cell div {
+    display: flex;
+    align-items: center;
+}
