@@ -4,6 +4,8 @@ const { validateUp2StreamBaseUrl } = require('../api/validators');
 const DEFAULT_INTERVAL_MS = 5000;
 const DEFAULT_TIMEOUT_MS = 4000;
 const DEFAULT_CACHE_TTL_MS = 20000;
+const DEFAULT_BACKOFF_MS = Object.freeze([10000, 30000, 60000]);
+const DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 3;
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 
 class MetadataDecodeError extends Error {
@@ -67,13 +69,18 @@ function createStreamPoller({
   intervalMs = DEFAULT_INTERVAL_MS,
   timeoutMs = Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || `${DEFAULT_TIMEOUT_MS}`, 10),
   cacheTtlMs = Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || `${DEFAULT_CACHE_TTL_MS}`, 10),
+  failureThreshold = DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
+  backoffMs = DEFAULT_BACKOFF_MS,
+  onHealthChange,
   logger = console
 } = {}) {
-  const baseUrl = validateUp2StreamBaseUrl(deviceIp || process.env.UP2STREAM_BASE_URL);
+  const baseUrl = validateUp2StreamBaseUrl(deviceIp || process.env.UP2STREAM_BASE_URL || (process.env.UP2STREAM_IP ? `http://${process.env.UP2STREAM_IP}` : null));
   const endpoint = `${baseUrl}/getPlayerStatus`;
 
   let timer = null;
   let polling = false;
+  let consecutiveFailures = 0;
+  let offline = false;
   let cache = {
     metadata: { title: '', artist: '', album: '' },
     fetchedAt: null,
@@ -96,6 +103,15 @@ function createStreamPoller({
     return ageMs == null ? true : ageMs > cacheTtlMs;
   }
 
+  function emitHealth(errorMessage = null) {
+    onHealthChange?.({
+      offline,
+      failures: consecutiveFailures,
+      error: errorMessage,
+      at: new Date().toISOString()
+    });
+  }
+
   function getStatus() {
     const ttlExpired = isTtlExpired();
     const stale = cache.stale || ttlExpired;
@@ -110,7 +126,9 @@ function createStreamPoller({
       fetchedAt: cache.fetchedAt,
       cacheTtlMs,
       cacheAgeMs: getCacheAgeMs(),
-      error: cache.error || undefined
+      error: cache.error || undefined,
+      offline,
+      failures: consecutiveFailures
     };
   }
 
@@ -132,8 +150,17 @@ function createStreamPoller({
         staleReason: null
       };
 
+      if (consecutiveFailures > 0 || offline) {
+        consecutiveFailures = 0;
+        offline = false;
+        emitHealth(null);
+      }
+
       return getStatus();
     } catch (error) {
+      consecutiveFailures += 1;
+      offline = consecutiveFailures >= failureThreshold;
+
       cache = {
         ...cache,
         source: 'cache',
@@ -142,9 +169,27 @@ function createStreamPoller({
         error: error.message || 'Failed to poll Up2Stream metadata'
       };
 
+      emitHealth(cache.error);
       logger.error?.('[streamPoller] poll failed:', cache.error);
       return getStatus();
     }
+  }
+
+  function clearTimer() {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+  }
+
+  function scheduleNextTick() {
+    clearTimer();
+    const backoffIndex = Math.min(Math.max(0, consecutiveFailures - 1), backoffMs.length - 1);
+    const delay = consecutiveFailures > 0 ? (backoffMs[backoffIndex] || intervalMs) : intervalMs;
+
+    timer = setTimeout(() => {
+      timer = null;
+      void tick();
+    }, delay);
   }
 
   async function tick() {
@@ -154,21 +199,17 @@ function createStreamPoller({
       await pollOnce();
     } finally {
       polling = false;
+      scheduleNextTick();
     }
   }
 
   function start() {
-    if (timer) return;
+    if (timer || polling) return;
     void tick();
-    timer = setInterval(() => {
-      void tick();
-    }, intervalMs);
   }
 
   function stop() {
-    if (!timer) return;
-    clearInterval(timer);
-    timer = null;
+    clearTimer();
   }
 
   return {

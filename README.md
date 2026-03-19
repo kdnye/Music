@@ -40,9 +40,11 @@ Create a `.env` file (or export variables in your shell) before startup:
 PORT=3000
 
 # DAX88 serial path on the host machine
-DAX88_SERIAL_PATH=/dev/ttyUSB0
+DAX88_SERIAL_PORT=/dev/ttyUSB0
 
 # Up2Stream module IP (single module)
+UP2STREAM_IP=192.168.1.55
+# optional alternative
 UP2STREAM_BASE_URL=http://192.168.1.55
 
 # REQUIRED: bearer token for authenticated control endpoints
@@ -71,6 +73,8 @@ Optional runtime flags:
 - `DAX88_SERIAL_DISABLED=true` for development without physical serial hardware.
 - `UP2STREAM_TIMEOUT_MS=4000` to tune metadata polling request timeout.
 - `UP2STREAM_CACHE_TTL_MS=20000` to control how long cached metadata is considered fresh before being marked stale.
+- `DAX88_INTER_WRITE_DELAY_MS=50` and `DAX88_QUEUE_TASK_TIMEOUT_MS=2500` to tune global serial FIFO queue pacing/timeouts.
+- Polling loops include built-in retry backoff at 10s, 30s, and 60s after repeated failures; hardware is marked offline after 3 consecutive failures.
 
 > Multiple Up2Stream IPs: this service currently reads one `UP2STREAM_BASE_URL` per process. For multiple modules, run one process per module with different `UP2STREAM_BASE_URL` and (if needed) different `PORT`.
 
