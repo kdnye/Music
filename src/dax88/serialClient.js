@@ -59,5 +59,7 @@ async function writeCommand(command) {
 }
 
 module.exports = {
+  ensureOpen,
+  initPort,
   writeCommand
 };
