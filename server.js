@@ -7,12 +7,27 @@ const {
 } = require('./src/dax88/commands');
 const { writeCommand } = require('./src/dax88/serialClient');
 const { fetchPlayerStatus } = require('./src/stream/statusService');
+const {
+  rateLimitControls,
+  requestLogger,
+  requireControlAuth
+} = require('./src/api/security');
+const {
+  validatePowerPayload,
+  validateSourcePayload,
+  validateVolumePayload
+} = require('./src/api/validators');
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '32kb' }));
+app.use(requestLogger);
 app.use(express.static(path.join(__dirname, 'public')));
+
+const controlRouter = express.Router();
+controlRouter.use(requireControlAuth);
+controlRouter.use(rateLimitControls);
 
 function ok(res, data, meta = {}) {
   return res.json({ success: true, data, meta });
@@ -36,15 +51,15 @@ function internalError(res, message, details) {
  * POST /api/dax88/volume
  * body: { zone: number (1-8), volume: number (0-38) }
  */
-app.post('/api/dax88/volume', async (req, res) => {
+controlRouter.post('/volume', async (req, res) => {
   try {
-    const { zone, volume } = req.body || {};
+    const { zone, volume } = validateVolumePayload(req.body || {});
     const command = buildVolumeCommand(zone, volume);
     const writeResult = await writeCommand(command);
 
     return ok(res, { zone, volume, command, writeResult });
   } catch (error) {
-    if (/must be|between/.test(error.message)) {
+    if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
     }
     return internalError(res, 'Unable to set volume', error.message);
@@ -55,15 +70,15 @@ app.post('/api/dax88/volume', async (req, res) => {
  * POST /api/dax88/power
  * body: { zone: number (1-8), power: boolean|string }
  */
-app.post('/api/dax88/power', async (req, res) => {
+controlRouter.post('/power', async (req, res) => {
   try {
-    const { zone, power } = req.body || {};
+    const { zone, power } = validatePowerPayload(req.body || {});
     const command = buildPowerCommand(zone, power);
     const writeResult = await writeCommand(command);
 
     return ok(res, { zone, power, command, writeResult });
   } catch (error) {
-    if (/must be|between/.test(error.message)) {
+    if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
     }
     return internalError(res, 'Unable to set power state', error.message);
@@ -74,20 +89,22 @@ app.post('/api/dax88/power', async (req, res) => {
  * POST /api/dax88/source
  * body: { zone: number (1-8), source: number (1-8) }
  */
-app.post('/api/dax88/source', async (req, res) => {
+controlRouter.post('/source', async (req, res) => {
   try {
-    const { zone, source } = req.body || {};
+    const { zone, source } = validateSourcePayload(req.body || {});
     const command = buildSourceCommand(zone, source);
     const writeResult = await writeCommand(command);
 
     return ok(res, { zone, source, command, writeResult });
   } catch (error) {
-    if (/must be|between/.test(error.message)) {
+    if (/must be|between|unknown fields/.test(error.message)) {
       return badRequest(res, error.message);
     }
     return internalError(res, 'Unable to set source', error.message);
   }
 });
+
+app.use('/api/dax88', controlRouter);
 
 /**
  * GET /api/stream/status
