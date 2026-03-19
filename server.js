@@ -75,6 +75,12 @@ function logStartupConfig() {
 app.use(express.json({ limit: '32kb' }));
 app.use(requestLogger);
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/fsi.css', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'fsi.css'));
+});
+app.get('/app-overrides.css', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'app-overrides.css'));
+});
 
 function requireApiProtection(req, res, next) {
   if (!req.path.startsWith('/api/')) {
