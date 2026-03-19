@@ -114,7 +114,8 @@
       }
 
 
-      let eventsConnection = null;
+      let stateStream = null;
+      let reconnectTimer = null;
       let liveState = {
         stream: null,
         zones: {},
@@ -136,18 +137,22 @@
         liveStatus.className = isError ? 'status error' : 'status';
       }
 
-      function connectEvents() {
-        if (eventsConnection) {
-          eventsConnection.close();
+      function connectStateStream() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (stateStream) {
+          stateStream.close();
         }
 
-        eventsConnection = new EventSource('/api/events');
+        stateStream = new EventSource('/api/state/stream');
 
-        eventsConnection.addEventListener('connected', () => {
+        stateStream.onopen = () => {
           updateLiveStatusLabel('connected');
-        });
+        };
 
-        eventsConnection.addEventListener('state-snapshot', (event) => {
+        stateStream.onmessage = (event) => {
           const payload = JSON.parse(event.data || '{}');
           liveState = {
             stream: payload.stream || liveState.stream,
@@ -155,37 +160,12 @@
             hardware: payload.hardware || liveState.hardware
           };
           renderLiveState();
-        });
+        };
 
-        eventsConnection.addEventListener('stream-status', (event) => {
-          liveState.stream = JSON.parse(event.data || '{}');
-          renderLiveState();
-        });
-
-        eventsConnection.addEventListener('zone-state-changed', (event) => {
-          const payload = JSON.parse(event.data || '{}');
-          if (payload.zoneId && payload.state) {
-            liveState.zones[payload.zoneId] = payload.state;
-            renderLiveState();
-          }
-        });
-
-        eventsConnection.addEventListener('zones-state', (event) => {
-          liveState.zones = JSON.parse(event.data || '{}');
-          renderLiveState();
-        });
-
-        eventsConnection.addEventListener('hardware-health', (event) => {
-          const payload = JSON.parse(event.data || '{}');
-          liveState.hardware = liveState.hardware || {};
-          if (payload.device) {
-            liveState.hardware[payload.device] = payload;
-            renderLiveState();
-          }
-        });
-
-        eventsConnection.onerror = () => {
+        stateStream.onerror = () => {
           updateLiveStatusLabel('reconnecting...', true);
+          stateStream.close();
+          reconnectTimer = setTimeout(connectStateStream, 3000);
         };
       }
 
@@ -258,7 +238,7 @@
 
       function setVolume() {
         return api('/api/dax88/volume', 'POST', {
-          zone: Number(document.getElementById('zone').value),
+          target: String(document.getElementById('zone').value).padStart(2, '0'),
           volume: Number(document.getElementById('volume').value)
         });
       }
@@ -272,7 +252,7 @@
 
       function setSource() {
         return api('/api/dax88/source', 'POST', {
-          zone: Number(document.getElementById('zone').value),
+          target: String(document.getElementById('zone').value).padStart(2, '0'),
           source: Number(document.getElementById('source').value)
         });
       }
@@ -282,7 +262,7 @@
       }
 
       setAuthenticatedState(false, 'Log in or provide a bearer token to enable controls.');
-      connectEvents();
+      connectStateStream();
     </script>
   </body>
 </html>
