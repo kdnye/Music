@@ -57,6 +57,14 @@ BROWSER_TOKEN_TTL_MS=300000
 # Optional: request rate limiting on control endpoints (defaults shown)
 API_RATE_LIMIT_WINDOW_MS=60000
 API_RATE_LIMIT_MAX=60
+
+
+# Optional: group mapping JSON string (overrides file groups by key)
+# Example: {"sales-floor":["01","02","03"]}
+DAX88_ZONE_GROUPS=
+
+# Optional: path to group mapping file (default: ./config/groups.json)
+DAX88_GROUPS_FILE=./config/groups.json
 ```
 
 Optional runtime flags:
@@ -200,6 +208,34 @@ Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
 Body:
 ```json
 { "zone": 1, "source": 3 }
+```
+
+
+### `POST /api/dax88/group/:groupId/volume`
+Headers:
+```http
+Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
+```
+Body:
+```json
+{ "volume": 20 }
+```
+
+Returns per-zone results and aggregate summary:
+```json
+{
+  "success": true,
+  "data": {
+    "groupId": "sales-floor",
+    "volume": 20,
+    "results": [
+      { "zoneId": "01", "ok": true },
+      { "zoneId": "02", "ok": false, "error": "..." }
+    ],
+    "summary": { "total": 2, "succeeded": 1, "failed": 1 },
+    "requestId": "..."
+  }
+}
 ```
 
 ### `GET /api/stream/status`

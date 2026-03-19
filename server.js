@@ -9,6 +9,7 @@ const { writeCommand } = require('./src/dax88/serialClient');
 const { createDax88Monitor } = require('./src/agents/dax88Monitor');
 const { createStreamPoller } = require('./src/agents/streamPoller');
 const { createZoneController } = require('./src/agents/zoneController');
+const { loadGroups } = require('./src/config/groups');
 const {
   issueBrowserToken,
   purgeExpiredBrowserTokens,
@@ -20,6 +21,7 @@ const {
 const {
   validatePowerPayload,
   validateSourcePayload,
+  validateVolume,
   validateVolumePayload
 } = require('./src/api/validators');
 
@@ -53,33 +55,6 @@ function parseActiveZones() {
     .filter((zone) => /^0[1-8]$/.test(zone));
 }
 
-function parseGroups(rawGroups) {
-  if (!rawGroups) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(rawGroups);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-
-    return Object.entries(parsed).reduce((acc, [groupId, zones]) => {
-      if (!Array.isArray(zones)) {
-        return acc;
-      }
-
-      acc[groupId] = zones
-        .map((zone) => String(Number.parseInt(zone, 10)).padStart(2, '0'))
-        .filter((zone) => /^0[1-8]$/.test(zone));
-      return acc;
-    }, {});
-  } catch (_error) {
-    console.warn('[server] Failed to parse DAX88_ZONE_GROUPS; ignoring group config');
-    return {};
-  }
-}
-
 const streamPoller = (() => {
   try {
     return createStreamPoller({
@@ -108,7 +83,7 @@ const zoneMonitor = createDax88Monitor({
 });
 
 const zoneController = createZoneController({
-  groups: parseGroups(process.env.DAX88_ZONE_GROUPS)
+  groups: loadGroups()
 });
 
 const controlRouter = express.Router();
@@ -224,6 +199,38 @@ controlRouter.post('/source', async (req, res) => {
   }
 });
 
+
+/**
+ * POST /api/dax88/group/:groupId/volume
+ * body: { volume: number (0-38) }
+ */
+controlRouter.post('/group/:groupId/volume', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    if (!groupId) {
+      return badRequest(res, 'groupId is required');
+    }
+
+    const volume = validateVolume(req.body?.volume);
+    const result = await zoneController.executeGroupCommand({
+      groupId,
+      command: { type: 'volume', volume }
+    });
+
+    return ok(res, {
+      groupId,
+      volume,
+      results: result.results,
+      summary: result.summary,
+      requestId: result.requestId
+    });
+  } catch (error) {
+    if (/Unknown|Unsupported|Invalid|must be|between|unknown fields/.test(error.message)) {
+      return badRequest(res, error.message);
+    }
+    return internalError(res, 'Unable to set group volume', error.message);
+  }
+});
 /**
  * POST /api/dax88/group-command
  * body: { groupId: string, command: ZoneCommand }
