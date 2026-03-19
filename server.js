@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const axios = require('axios');
 const {
   buildPowerCommand,
   buildSourceCommand,
@@ -7,7 +8,6 @@ const {
 } = require('./src/dax88/commands');
 const { writeCommand } = require('./src/dax88/serialClient');
 const { createDax88Monitor } = require('./src/agents/dax88Monitor');
-const { createStreamPoller } = require('./src/agents/streamPoller');
 const { createZoneController } = require('./src/agents/zoneController');
 const { loadGroups } = require('./src/config/groups');
 const {
@@ -20,6 +20,7 @@ const {
 } = require('./src/api/security');
 const {
   validatePowerPayload,
+  validateUp2StreamBaseUrl,
   validateVolume
 } = require('./src/api/validators');
 
@@ -53,31 +54,107 @@ function parseActiveZones() {
     .filter((zone) => /^0[1-8]$/.test(zone));
 }
 
-const streamPoller = (() => {
-  try {
-    return createStreamPoller({
-      deviceIp: process.env.UP2STREAM_BASE_URL,
-      cacheTtlMs: Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10)
-    });
-  } catch (error) {
-    console.warn('[server] stream poller disabled:', error.message);
-    return {
-      start: () => {},
-      stop: () => {},
-      getStatus: () => ({
-        endpoint: null,
-        metadata: { title: '', artist: '', album: '' },
-        source: 'cache',
-        stale: true,
-        staleReason: 'poller-disabled',
-        fetchedAt: null,
-        cacheTtlMs: Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10),
-        cacheAgeMs: null,
-        error: error.message
-      })
-    };
+const STREAM_UNKNOWN_SENTINEL = 'UNKNOWN';
+const streamTimeoutMs = Number.parseInt(process.env.UP2STREAM_TIMEOUT_MS || '4000', 10);
+let streamEndpoint = null;
+const systemState = {
+  stream: {
+    title: '',
+    artist: '',
+    album: '',
+    source: 'cache',
+    fetchedAt: null
   }
-})();
+};
+
+try {
+  const baseUrl = validateUp2StreamBaseUrl(process.env.UP2STREAM_BASE_URL);
+  streamEndpoint = `${baseUrl}/getPlayerStatus`;
+} catch (error) {
+  systemState.stream = {
+    ...systemState.stream,
+    error: error.message || 'UP2Stream is not configured',
+    source: 'cache',
+    fetchedAt: new Date().toISOString()
+  };
+  console.warn('[server] stream polling disabled:', systemState.stream.error);
+}
+
+function safeDecodeHexField(value, fallback = '') {
+  if (value == null) {
+    return fallback;
+  }
+
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+  if (!normalized || normalized.toUpperCase() === STREAM_UNKNOWN_SENTINEL) {
+    return fallback;
+  }
+
+  const compact = normalized.replace(/\s+/g, '');
+  if (!compact || compact.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(compact)) {
+    return fallback;
+  }
+
+  try {
+    const decoded = Buffer.from(compact, 'hex').toString('utf8').replace(/\0/g, '').trim();
+    if (decoded.includes('\uFFFD')) {
+      return fallback;
+    }
+    return decoded;
+  } catch {
+    return fallback;
+  }
+}
+
+function formatStreamError(error) {
+  const rawMessage = (error && error.message) ? error.message : 'metadata poll failed';
+  return rawMessage.split('\n')[0].slice(0, 160);
+}
+
+async function pollStreamMetadataAndUpdateCache() {
+  if (!streamEndpoint) {
+    systemState.stream = {
+      ...systemState.stream,
+      source: 'cache',
+      fetchedAt: new Date().toISOString(),
+      error: systemState.stream.error || 'UP2Stream endpoint not configured'
+    };
+    return systemState.stream;
+  }
+
+  try {
+    const response = await axios.get(streamEndpoint, { timeout: streamTimeoutMs });
+    if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
+      throw new Error(`Unexpected response (${response.status})`);
+    }
+
+    const title = safeDecodeHexField(response.data.Title, systemState.stream.title);
+    const artist = safeDecodeHexField(response.data.Artist, systemState.stream.artist);
+    const album = safeDecodeHexField(response.data.Album, systemState.stream.album);
+
+    systemState.stream = {
+      title,
+      artist,
+      album,
+      source: 'live',
+      fetchedAt: new Date().toISOString()
+    };
+
+    return systemState.stream;
+  } catch (error) {
+    systemState.stream = {
+      ...systemState.stream,
+      source: 'cache',
+      fetchedAt: new Date().toISOString(),
+      error: formatStreamError(error)
+    };
+    return systemState.stream;
+  }
+}
 
 const officeGroups = loadGroups();
 const DAX88_VOLUME_RANGE = Object.freeze({ min: 0, max: 38 });
@@ -515,16 +592,16 @@ app.use('/api/dax88', controlRouter);
  */
 app.get('/api/stream/status', (_req, res) => {
   try {
-    const status = streamPoller.getStatus();
-    return ok(res, status.metadata, {
-      endpoint: status.endpoint,
-      source: status.source,
-      stale: status.stale,
-      staleReason: status.staleReason,
-      fetchedAt: status.fetchedAt,
-      cacheTtlMs: status.cacheTtlMs,
-      cacheAgeMs: status.cacheAgeMs,
-      error: status.error
+    const stream = systemState.stream;
+    return ok(res, {
+      title: stream.title,
+      artist: stream.artist,
+      album: stream.album
+    }, {
+      endpoint: streamEndpoint,
+      source: stream.source,
+      fetchedAt: stream.fetchedAt,
+      error: stream.error
     });
   } catch (error) {
     if (error.message.includes('UP2STREAM_BASE_URL')) {
@@ -565,6 +642,13 @@ app.get('/api/health', (_req, res) => {
       streamPoller: streamPollingLoop.getStatus(),
       dax88Monitor: dax88PollingLoop.getStatus()
     }
+  });
+});
+
+app.get('/api/state', (_req, res) => {
+  return ok(res, {
+    stream: systemState.stream,
+    zones: zoneMonitor.getZoneStates()
   });
 });
 
@@ -671,7 +755,7 @@ function createGuardedPollingLoop({
 const streamPollingLoop = createGuardedPollingLoop({
   name: 'streamPollerLoop',
   intervalMs: 5000,
-  runCycle: () => streamPoller.pollOnce()
+  runCycle: () => pollStreamMetadataAndUpdateCache()
 });
 
 const dax88PollingLoop = createGuardedPollingLoop({
