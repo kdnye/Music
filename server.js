@@ -28,6 +28,15 @@ const {
   fetchPlayerStatus,
   StreamStatusServiceError
 } = require('./src/stream/statusService');
+const {
+  addClient,
+  removeClient,
+  getSystemState,
+  updateAllDax88States,
+  updateDax88State,
+  updateHardwareState,
+  updateStreamState
+} = require('./src/api/sseManager');
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
@@ -129,7 +138,6 @@ function requireApiProtection(req, res, next) {
 app.use(requireApiProtection);
 
 const sseClients = new Set();
-const stateStreamClients = new Set();
 
 function publishEvent(eventName, payload) {
   const message = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -139,18 +147,7 @@ function publishEvent(eventName, payload) {
 }
 
 function buildStateSnapshot() {
-  return {
-    stream: systemState.stream,
-    zones: zoneMonitor.getZoneStates(),
-    hardware: systemState.hardware
-  };
-}
-
-function broadcastStateSnapshot() {
-  const payload = `data: ${JSON.stringify(buildStateSnapshot())}\n\n`;
-  for (const client of stateStreamClients) {
-    client.write(payload);
-  }
+  return getSystemState();
 }
 
 function parseActiveZones() {
@@ -169,19 +166,7 @@ function parseActiveZones() {
 
 const streamEndpoint = `${UP2STREAM_BASE_URL}/getPlayerStatus`;
 const streamCacheTtlMs = Number.parseInt(process.env.UP2STREAM_CACHE_TTL_MS || '20000', 10);
-const systemState = {
-  hardware: {
-    up2stream: { offline: false, failures: 0, lastError: null, recoveredAt: null },
-    dax88: { offline: false, failures: 0, lastError: null, recoveredAt: null }
-  },
-  stream: {
-    title: '',
-    artist: '',
-    album: '',
-    source: 'cache',
-    fetchedAt: null
-  }
-};
+const systemState = getSystemState();
 
 function formatStreamError(error) {
   const rawMessage = (error && error.message) ? error.message : 'metadata poll failed';
@@ -189,7 +174,7 @@ function formatStreamError(error) {
 }
 
 function applyStreamStatusToSystemState(streamStatus) {
-  systemState.stream = {
+  updateStreamState({
     title: streamStatus.metadata?.Title || '',
     artist: streamStatus.metadata?.Artist || '',
     album: streamStatus.metadata?.Album || '',
@@ -198,7 +183,7 @@ function applyStreamStatusToSystemState(streamStatus) {
     stale: Boolean(streamStatus.stale),
     expiresAt: streamStatus.expiresAt || null,
     error: streamStatus.error || undefined
-  };
+  });
   return systemState.stream;
 }
 
@@ -207,18 +192,15 @@ async function pollStreamMetadataAndUpdateCache() {
     const streamStatus = await fetchPlayerStatus({ cacheTtlMs: streamCacheTtlMs });
     const stream = applyStreamStatusToSystemState(streamStatus);
     publishEvent('stream-status', stream);
-    broadcastStateSnapshot();
     return stream;
   } catch (error) {
     const isKnownStatusError = error instanceof StreamStatusServiceError;
-    systemState.stream = {
-      ...systemState.stream,
+    updateStreamState({
       source: 'cache',
       stale: true,
       error: isKnownStatusError ? error.reason : formatStreamError(error)
-    };
+    });
     publishEvent('stream-status', systemState.stream);
-    broadcastStateSnapshot();
     return systemState.stream;
   }
 }
@@ -252,7 +234,10 @@ const zoneMonitor = createDax88Monitor({
       throw new Error(queued.error);
     }
   },
-  publishDelta: (event) => publishEvent('zone-state-changed', event)
+  publishDelta: (event) => {
+    updateDax88State(event.zoneId, event.state);
+    publishEvent('zone-state-changed', event);
+  }
 });
 
 const zoneController = createZoneController({
@@ -701,11 +686,11 @@ app.get('/api/state/stream', (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  stateStreamClients.add(res);
-  res.write(`data: ${JSON.stringify(buildStateSnapshot())}\n\n`);
+  res.write(`data: ${JSON.stringify(getSystemState())}\n\n`);
+  addClient(res);
 
   req.on('close', () => {
-    stateStreamClients.delete(res);
+    removeClient(res);
   });
 });
 
@@ -719,13 +704,6 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.get('/api/state', (_req, res) => {
-  return ok(res, {
-    stream: systemState.stream,
-    zones: zoneMonitor.getZoneStates(),
-    hardware: systemState.hardware
-  });
-});
 
 function createResilientPollingLoop({
   name,
@@ -833,9 +811,8 @@ const streamPollingLoop = createResilientPollingLoop({
   name: 'streamPollerLoop',
   intervalMs: STREAM_POLL_INTERVAL_MS,
   onHealthChange: ({ offline, failures, error, recoveredAt }) => {
-    systemState.hardware.up2stream = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
+    updateHardwareState('up2stream', { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null });
     publishEvent('hardware-health', { device: 'up2stream', ...systemState.hardware.up2stream });
-    broadcastStateSnapshot();
   },
   runCycle: () => pollStreamMetadataAndUpdateCache()
 });
@@ -844,15 +821,14 @@ const dax88PollingLoop = createResilientPollingLoop({
   name: 'dax88MonitorLoop',
   intervalMs: DAX88_MONITOR_INTERVAL_MS,
   onHealthChange: ({ offline, failures, error, recoveredAt }) => {
-    systemState.hardware.dax88 = { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null };
+    updateHardwareState('dax88', { offline, failures, lastError: error || null, recoveredAt: recoveredAt || null });
     publishEvent('hardware-health', { device: 'dax88', ...systemState.hardware.dax88 });
-    broadcastStateSnapshot();
   },
   runCycle: async () => {
     const result = await zoneMonitor.pollOnce();
     if (result.events.length > 0) {
+      updateAllDax88States(result.zoneStates);
       publishEvent('zones-state', result.zoneStates);
-      broadcastStateSnapshot();
     }
   }
 });
@@ -927,10 +903,6 @@ async function shutdown(signal) {
     client.end();
   }
   sseClients.clear();
-  for (const client of stateStreamClients) {
-    client.end();
-  }
-  stateStreamClients.clear();
 
   if (!server) {
     process.exit(0);
