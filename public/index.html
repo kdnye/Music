@@ -118,7 +118,7 @@
       let reconnectTimer = null;
       let liveState = {
         stream: null,
-        zones: {},
+        dax88: {},
         hardware: null
       };
 
@@ -148,11 +148,11 @@
 
       function syncControlsFromLiveZoneState() {
         const selectedZoneId = normalizeZoneId(document.getElementById('zone').value);
-        if (!selectedZoneId || !liveState?.zones?.[selectedZoneId]) {
+        if (!selectedZoneId || !liveState?.dax88?.[selectedZoneId]) {
           return;
         }
 
-        const zoneState = liveState.zones[selectedZoneId];
+        const zoneState = liveState.dax88[selectedZoneId];
         const volumeInput = document.getElementById('volume');
         const sourceInput = document.getElementById('source');
         const powerSelect = document.getElementById('power');
@@ -192,7 +192,7 @@
           const payload = JSON.parse(event.data || '{}');
           liveState = {
             stream: payload.stream || liveState.stream,
-            zones: payload.zones || liveState.zones,
+            dax88: payload.dax88 || payload.zones || liveState.dax88,
             hardware: payload.hardware || liveState.hardware
           };
           syncControlsFromLiveZoneState();
