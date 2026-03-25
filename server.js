@@ -13,6 +13,10 @@ const { createDax88Monitor } = require('./src/agents/dax88Monitor');
 const { createZoneController } = require('./src/dax88/zone_controller');
 const { loadGroups } = require('./src/config/groups');
 const {
+  createLiveScheduleAgent,
+  createScheduleStore
+} = require('./src/scheduling/liveSchedule');
+const {
   issueBrowserToken,
   purgeExpiredBrowserTokens,
   rateLimitControls,
@@ -44,6 +48,7 @@ const STREAMER_IP = process.env.UP2STREAM_IP || process.env.STREAMER_IP || '127.
 const UP2STREAM_BASE_URL = process.env.UP2STREAM_BASE_URL || `http://${STREAMER_IP}`;
 const STREAM_POLL_INTERVAL_MS = Number.parseInt(process.env.UP2STREAM_POLL_INTERVAL_MS || '5000', 10);
 const DAX88_MONITOR_INTERVAL_MS = Number.parseInt(process.env.DAX88_MONITOR_INTERVAL_MS || '3000', 10);
+const LIVE_SCHEDULE_INTERVAL_MS = Number.parseInt(process.env.DAX88_LIVE_SCHEDULE_INTERVAL_MS || '60000', 10);
 
 let isShuttingDown = false;
 let shutdownInProgress = false;
@@ -243,6 +248,21 @@ const zoneMonitor = createDax88Monitor({
 const zoneController = createZoneController({
   groups: officeGroups,
   writeFn: (serialCommand) => dispatchQueuedCommand(serialCommand, { label: 'group-command' })
+});
+const scheduleStore = createScheduleStore();
+const liveScheduleAgent = createLiveScheduleAgent({
+  getSchedule: () => scheduleStore.get(),
+  executeZonePowerCommand: async ({ zoneId, power, reason }) => {
+    const zoneNumber = Number.parseInt(zoneId, 10);
+    const command = buildPowerCommand(zoneNumber, power);
+    const queued = await dispatchQueuedCommand(command, {
+      label: `schedule-${reason}-zone-${zoneId}`
+    });
+    if (!queued.ok) {
+      throw new Error(queued.error);
+    }
+    return queued;
+  }
 });
 
 function formatProtocolValue(value, { min, max, field }) {
@@ -614,6 +634,19 @@ controlRouter.post('/group-command', async (req, res) => {
   }
 });
 
+controlRouter.get('/schedule', (_req, res) => {
+  return ok(res, scheduleStore.get(), { filePath: scheduleStore.filePath });
+});
+
+controlRouter.put('/schedule', (req, res) => {
+  try {
+    const saved = scheduleStore.save(req.body || {});
+    return ok(res, saved, { filePath: scheduleStore.filePath });
+  } catch (error) {
+    return badRequest(res, error.message);
+  }
+});
+
 app.use('/api/dax88', controlRouter);
 
 /**
@@ -699,7 +732,8 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     agents: {
       streamPoller: streamPollingLoop.getStatus(),
-      dax88Monitor: dax88PollingLoop.getStatus()
+      dax88Monitor: dax88PollingLoop.getStatus(),
+      liveSchedule: liveScheduleLoop.getStatus()
     }
   });
 });
@@ -833,6 +867,29 @@ const dax88PollingLoop = createResilientPollingLoop({
   }
 });
 
+const liveScheduleLoop = createResilientPollingLoop({
+  name: 'liveScheduleLoop',
+  intervalMs: LIVE_SCHEDULE_INTERVAL_MS,
+  onHealthChange: ({ offline, failures, error, recoveredAt }) => {
+    updateHardwareState('dax88', {
+      scheduleOffline: offline,
+      scheduleFailures: failures,
+      scheduleLastError: error || null,
+      scheduleRecoveredAt: recoveredAt || null
+    });
+    publishEvent('hardware-health', { device: 'dax88', ...systemState.hardware.dax88 });
+  },
+  runCycle: async () => {
+    const result = await liveScheduleAgent.runCycle();
+    if (result.ran) {
+      publishEvent('live-schedule', {
+        activeZones: result.activeZones,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+});
+
 async function runColdStartSweep() {
   if (process.env.DAX88_SERIAL_DISABLED === 'true') {
     console.warn('[server] skipping cold start sweep because DAX88_SERIAL_DISABLED=true');
@@ -852,6 +909,7 @@ async function runColdStartSweep() {
 async function startAgents() {
   try {
     streamPollingLoop.start();
+    liveScheduleLoop.start();
     if (process.env.DAX88_SERIAL_DISABLED === 'true') {
       console.warn('[server] dax88 monitor loop disabled by DAX88_SERIAL_DISABLED=true');
     } else {
@@ -865,6 +923,7 @@ async function startAgents() {
 function stopAgents() {
   streamPollingLoop.stop();
   dax88PollingLoop.stop();
+  liveScheduleLoop.stop();
 }
 
 async function drainSerialQueue(timeoutMs = 4000) {

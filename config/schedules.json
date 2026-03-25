@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "timezone": "America/Phoenix",
+  "keepAliveIntervalMinutes": 5,
+  "businessHours": {
+    "days": [1, 2, 3, 4, 5],
+    "start": "08:00",
+    "end": "18:00"
+  },
+  "zoneSchedules": []
+}
