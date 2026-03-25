@@ -74,6 +74,8 @@ Optional runtime flags:
 - `UP2STREAM_TIMEOUT_MS=4000` to tune metadata polling request timeout.
 - `UP2STREAM_CACHE_TTL_MS=20000` to control how long cached metadata is considered fresh before being marked stale.
 - `DAX88_INTER_WRITE_DELAY_MS=50` and `DAX88_QUEUE_TASK_TIMEOUT_MS=2500` to tune global serial FIFO queue pacing/timeouts.
+- `DAX88_LIVE_SCHEDULE_INTERVAL_MS=60000` to tune how often scheduled business-hour checks run.
+- `DAX88_SCHEDULE_FILE=./config/schedules.json` to override where schedule configuration is persisted.
 - Polling loops include built-in retry backoff at 10s, 30s, and 60s after repeated failures; hardware is marked offline after 3 consecutive failures.
 - On process boot, the service performs an immediate DAX88 cold-start sweep (`?01`..`?08`) before opening the HTTP listener so `/api/state` and SSE start with populated zone cache.
 
@@ -218,6 +220,25 @@ Success response includes:
 
 ### `GET /api/auth/status`
 Headers:
+
+### `GET /api/dax88/schedule`
+Returns the persisted live/business-hour schedule payload used by the schedule agent.
+
+### `PUT /api/dax88/schedule`
+Replaces the schedule payload and persists it to `config/schedules.json` (or `DAX88_SCHEDULE_FILE`).
+
+Example payload:
+```json
+{
+  "enabled": true,
+  "timezone": "America/Phoenix",
+  "keepAliveIntervalMinutes": 5,
+  "businessHours": { "days": [1,2,3,4,5], "start": "08:00", "end": "18:00" },
+  "zoneSchedules": [
+    { "zoneId": "01", "days": [1,2,3,4,5], "start": "08:00", "end": "18:00", "powerOnAtStart": true, "powerOffAtEnd": true, "keepAlive": true }
+  ]
+}
+```
 ```http
 Authorization: Bearer <API_AUTH_TOKEN|short-lived-browser-token>
 ```
