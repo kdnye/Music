@@ -41,6 +41,12 @@ PORT=3000
 
 # DAX88 serial path on the host machine
 DAX88_SERIAL_PORT=/dev/ttyUSB0
+DAX88_SERIAL_BAUD_RATE=9600
+DAX88_SERIAL_DATA_BITS=8
+DAX88_SERIAL_PARITY=none
+DAX88_SERIAL_STOP_BITS=1
+DAX88_SERIAL_OPEN_RETRIES=3
+DAX88_SERIAL_OPEN_RETRY_MS=500
 
 # Up2Stream module IP (single module)
 UP2STREAM_IP=192.168.1.55
@@ -74,6 +80,8 @@ Optional runtime flags:
 - `UP2STREAM_TIMEOUT_MS=4000` to tune metadata polling request timeout.
 - `UP2STREAM_CACHE_TTL_MS=20000` to control how long cached metadata is considered fresh before being marked stale.
 - `DAX88_INTER_WRITE_DELAY_MS=50` and `DAX88_QUEUE_TASK_TIMEOUT_MS=2500` to tune global serial FIFO queue pacing/timeouts.
+- `DAX88_SERIAL_BAUD_RATE`, `DAX88_SERIAL_DATA_BITS`, `DAX88_SERIAL_PARITY`, and `DAX88_SERIAL_STOP_BITS` to match your serial adapter profile.
+- `DAX88_SERIAL_OPEN_RETRIES=3` and `DAX88_SERIAL_OPEN_RETRY_MS=500` to improve startup resilience on bluetooth-backed serial links.
 - `DAX88_LIVE_SCHEDULE_INTERVAL_MS=60000` to tune how often scheduled business-hour checks run.
 - `DAX88_SCHEDULE_FILE=./config/schedules.json` to override where schedule configuration is persisted.
 - Polling loops include built-in retry backoff at 10s, 30s, and 60s after repeated failures; hardware is marked offline after 3 consecutive failures.
@@ -99,6 +107,37 @@ npm run dev
 Then open:
 - Dashboard: `http://localhost:3000/`
 - Health: `http://localhost:3000/api/health`
+
+## Raspberry Pi + Docker + DX-CP26 (Bluetooth RS-232) Deployment
+
+The DX-CP26 should be paired on the Raspberry Pi host and exposed as an RFCOMM device (for example `/dev/rfcomm0`) before the container starts.
+
+1) Pair and bind the adapter on the host:
+```bash
+bluetoothctl
+# then run: scan on, pair <MAC>, trust <MAC>, connect <MAC>
+sudo rfcomm bind /dev/rfcomm0 <DX-CP26-MAC> 1
+```
+
+2) Verify the serial bridge exists:
+```bash
+ls -l /dev/rfcomm0
+```
+
+3) Start with Docker Compose:
+```bash
+docker compose -f docker-compose.pi.yml up -d --build
+```
+
+4) Ensure your `.env` (or compose environment) points to:
+```bash
+DAX88_SERIAL_PORT=/dev/rfcomm0
+```
+
+Notes:
+- `docker-compose.pi.yml` uses `network_mode: host` to avoid multicast/SSE proxy friction on constrained Pi setups.
+- The container maps `/dev/rfcomm0` directly as a device, so host pairing and permissions are required.
+- Keep RS-232 settings at `9600 8N1` unless your DX-CP26 profile is customized.
 
 ## Security Controls
 
