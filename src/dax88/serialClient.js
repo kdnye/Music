@@ -2,18 +2,25 @@ const { SerialPort } = require('serialport');
 
 const DEFAULT_INTER_WRITE_DELAY_MS = Number.parseInt(process.env.DAX88_INTER_WRITE_DELAY_MS || '50', 10);
 const DEFAULT_QUEUE_TASK_TIMEOUT_MS = Number.parseInt(process.env.DAX88_QUEUE_TASK_TIMEOUT_MS || '2500', 10);
+const DEFAULT_SERIAL_OPEN_RETRY_MS = Number.parseInt(process.env.DAX88_SERIAL_OPEN_RETRY_MS || '500', 10);
+const DEFAULT_SERIAL_OPEN_RETRIES = Number.parseInt(process.env.DAX88_SERIAL_OPEN_RETRIES || '3', 10);
 
 let port;
 let queueTail = Promise.resolve();
 let queueStopped = false;
 
+function parseIntWithFallback(rawValue, fallback) {
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isInteger(parsed) ? parsed : fallback;
+}
+
 function getSerialConfig() {
   return {
     path: process.env.DAX88_SERIAL_PORT || process.env.DAX88_SERIAL_PATH || '/dev/ttyUSB0',
-    baudRate: 9600,
-    dataBits: 8,
-    parity: 'none',
-    stopBits: 1,
+    baudRate: parseIntWithFallback(process.env.DAX88_SERIAL_BAUD_RATE, 9600),
+    dataBits: parseIntWithFallback(process.env.DAX88_SERIAL_DATA_BITS, 8),
+    parity: process.env.DAX88_SERIAL_PARITY || 'none',
+    stopBits: parseIntWithFallback(process.env.DAX88_SERIAL_STOP_BITS, 1),
     autoOpen: false
   };
 }
@@ -57,12 +64,34 @@ function ensureOpen(serialPort) {
     return Promise.resolve();
   }
 
-  return new Promise((resolve, reject) => {
+  let attempt = 0;
+  const maxAttempts = Math.max(1, DEFAULT_SERIAL_OPEN_RETRIES);
+
+  const openAttempt = () => new Promise((resolve, reject) => {
     serialPort.open((error) => {
       if (error) return reject(error);
       resolve();
     });
   });
+
+  const tryOpen = async () => {
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        await openAttempt();
+        return;
+      } catch (error) {
+        const canRetry = attempt < maxAttempts;
+        if (!canRetry) {
+          throw error;
+        }
+
+        await wait(DEFAULT_SERIAL_OPEN_RETRY_MS);
+      }
+    }
+  };
+
+  return tryOpen();
 }
 
 function wait(ms) {
@@ -156,6 +185,7 @@ module.exports = {
   enqueueCommand,
   getSerialConfig,
   initPort,
+  parseIntWithFallback,
   stopQueue,
   writeCommand
 };

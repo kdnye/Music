@@ -1,0 +1,22 @@
+services:
+  music-control:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: music-control
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: 3000
+      DAX88_SERIAL_PORT: /dev/rfcomm0
+      DAX88_SERIAL_BAUD_RATE: 9600
+      DAX88_SERIAL_DATA_BITS: 8
+      DAX88_SERIAL_PARITY: none
+      DAX88_SERIAL_STOP_BITS: 1
+      DAX88_SERIAL_OPEN_RETRIES: 5
+      DAX88_SERIAL_OPEN_RETRY_MS: 800
+      UP2STREAM_BASE_URL: http://192.168.1.55
+      API_AUTH_TOKEN: change-me
+      DASHBOARD_LOGIN_PASSWORD: change-me
+    devices:
+      - /dev/rfcomm0:/dev/rfcomm0
