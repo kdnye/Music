@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 const DEFAULT_SCHEDULE = Object.freeze({
   enabled: false,
   timezone: 'America/Phoenix',
@@ -16,7 +20,10 @@ const DEFAULT_SCHEDULE = Object.freeze({
 function normalizeZoneId(zoneId) {
   const parsed = Number.parseInt(zoneId, 10);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
-    throw new Error(`zoneId must be between 01 and 08. Received: ${zoneId}`);
+    throw new Error(withRemediation(
+      `zoneId must be between 01 and 08. Received: ${zoneId}`,
+      'set zoneId to a numeric value from 1 to 8'
+    ));
   }
 
   return String(parsed).padStart(2, '0');
@@ -24,18 +31,27 @@ function normalizeZoneId(zoneId) {
 
 function parseTimeOfDay(raw) {
   if (typeof raw !== 'string') {
-    throw new Error('time must be a string in HH:MM format');
+    throw new Error(withRemediation(
+      'time must be a string in HH:MM format',
+      'send times as zero-padded 24-hour strings, for example 08:30'
+    ));
   }
 
   const match = raw.match(/^(\d{2}):(\d{2})$/);
   if (!match) {
-    throw new Error(`Invalid time format: ${raw}. Use HH:MM`);
+    throw new Error(withRemediation(
+      `Invalid time format: ${raw}. Use HH:MM`,
+      'use a 24-hour HH:MM value such as 17:45'
+    ));
   }
 
   const hours = Number.parseInt(match[1], 10);
   const minutes = Number.parseInt(match[2], 10);
   if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-    throw new Error(`Invalid time value: ${raw}`);
+    throw new Error(withRemediation(
+      `Invalid time value: ${raw}`,
+      'ensure hours are 00-23 and minutes are 00-59'
+    ));
   }
 
   return hours * 60 + minutes;
@@ -43,13 +59,19 @@ function parseTimeOfDay(raw) {
 
 function normalizeDays(days) {
   if (!Array.isArray(days) || days.length === 0) {
-    throw new Error('days must be a non-empty array of weekday numbers 0-6');
+    throw new Error(withRemediation(
+      'days must be a non-empty array of weekday numbers 0-6',
+      'provide at least one weekday where 0=Sun ... 6=Sat'
+    ));
   }
 
   const normalized = [...new Set(days.map((value) => Number.parseInt(value, 10)))].sort((a, b) => a - b);
   for (const day of normalized) {
     if (!Number.isInteger(day) || day < 0 || day > 6) {
-      throw new Error(`Invalid weekday value: ${day}`);
+      throw new Error(withRemediation(
+        `Invalid weekday value: ${day}`,
+        'each day must be an integer from 0 to 6'
+      ));
     }
   }
   return normalized;
@@ -64,7 +86,10 @@ function normalizeSchedule(payload = {}) {
   try {
     Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
   } catch (_error) {
-    throw new Error(`Invalid timezone: ${timezone}`);
+    throw new Error(withRemediation(
+      `Invalid timezone: ${timezone}`,
+      'use an IANA timezone such as America/Phoenix or UTC'
+    ));
   }
 
   const keepAliveIntervalMinutes = Number.parseInt(
@@ -72,7 +97,10 @@ function normalizeSchedule(payload = {}) {
     10
   );
   if (!Number.isInteger(keepAliveIntervalMinutes) || keepAliveIntervalMinutes < 1 || keepAliveIntervalMinutes > 60) {
-    throw new Error('keepAliveIntervalMinutes must be an integer between 1 and 60');
+    throw new Error(withRemediation(
+      'keepAliveIntervalMinutes must be an integer between 1 and 60',
+      'set keepAliveIntervalMinutes to a whole number in the allowed range'
+    ));
   }
 
   const businessHours = payload.businessHours || {};
@@ -136,7 +164,10 @@ function createScheduleStore({
       current = normalizeSchedule(parsed);
       return current;
     } catch (error) {
-      logger.warn?.('[schedule] failed to load schedule file, using defaults:', error.message);
+      logger.warn?.('[schedule] failed to load schedule file, using defaults:', withRemediation(
+        error.message,
+        'fix schedule JSON/timezone values, then reload configuration'
+      ));
       current = normalizeSchedule(DEFAULT_SCHEDULE);
       return current;
     }
@@ -220,11 +251,14 @@ function createLiveScheduleAgent({
   logger = console
 }) {
   if (typeof getSchedule !== 'function') {
-    throw new Error('getSchedule must be provided');
+    throw new Error(withRemediation('getSchedule must be provided', 'pass a function that returns the current schedule payload'));
   }
 
   if (typeof executeZonePowerCommand !== 'function') {
-    throw new Error('executeZonePowerCommand must be provided');
+    throw new Error(withRemediation(
+      'executeZonePowerCommand must be provided',
+      'pass an async function that sends per-zone power commands'
+    ));
   }
 
   const zoneState = new Map();

@@ -8,6 +8,10 @@ const { writeCommand: defaultWriteCommand } = require('./serialClient');
 
 const DEFAULT_INTER_WRITE_DELAY_MS = 50;
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 function wait(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -17,7 +21,10 @@ function wait(ms) {
 function normalizeZoneId(zoneId) {
   const parsed = Number.parseInt(zoneId, 10);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
-    throw new Error(`Invalid zone id: ${zoneId}`);
+    throw new Error(withRemediation(
+      `Invalid zone id: ${zoneId}`,
+      'use a numeric zone between 1 and 8'
+    ));
   }
 
   return String(parsed).padStart(2, '0');
@@ -39,7 +46,10 @@ function buildZoneCommand(zoneId, command) {
   }
 
   if (!command || typeof command !== 'object') {
-    throw new Error('command must be a function, string, or object');
+    throw new Error(withRemediation(
+      'command must be a function, string, or object',
+      'send command as { type, ... } or provide a zone-aware formatter function'
+    ));
   }
 
   const zone = Number.parseInt(zoneId, 10);
@@ -52,7 +62,10 @@ function buildZoneCommand(zoneId, command) {
     case 'volume':
       return buildVolumeCommand(zone, command.volume);
     default:
-      throw new Error(`Unsupported command type: ${command.type}`);
+      throw new Error(withRemediation(
+        `Unsupported command type: ${command.type}`,
+        'use one of: power, source, volume'
+      ));
   }
 }
 
@@ -81,7 +94,10 @@ async function writeToSerial({ serialPort, writeFn, serialCommand }) {
 
   const result = await writeFn(serialCommand);
   if (result && result.ok === false) {
-    throw new Error(result.error || 'Unknown serial write error');
+    throw new Error(withRemediation(
+      result.error || 'Unknown serial write error',
+      'inspect serial queue errors and retry command once connectivity is stable'
+    ));
   }
 }
 
@@ -95,12 +111,18 @@ async function executeGroupedZoneAction({
   logger = console
 } = {}) {
   if (!groupId || typeof groupId !== 'string') {
-    throw new Error('groupId is required');
+    throw new Error(withRemediation(
+      'groupId is required',
+      'provide a non-empty group key defined in config/groups.json or DAX88_ZONE_GROUPS'
+    ));
   }
 
   const rawZones = groups[groupId];
   if (!Array.isArray(rawZones) || rawZones.length === 0) {
-    throw new Error(`Unknown or empty group: ${groupId}`);
+    throw new Error(withRemediation(
+      `Unknown or empty group: ${groupId}`,
+      'create the group with at least one valid zone in config/groups.json'
+    ));
   }
 
   const zones = normalizeZones(rawZones);
@@ -115,8 +137,18 @@ async function executeGroupedZoneAction({
       await writeToSerial({ serialPort, writeFn, serialCommand });
       results.push({ zoneId, ok: true });
     } catch (error) {
-      logger.error?.(`[zone_controller] write failed for zone ${zoneId}:`, error.message);
-      results.push({ zoneId, ok: false, error: error.message || 'Unknown serial write error' });
+      logger.error?.(`[zone_controller] write failed for zone ${zoneId}:`, withRemediation(
+        error.message || 'Unknown serial write error',
+        `validate zone ${zoneId} command format and serial connectivity, then retry`
+      ));
+      results.push({
+        zoneId,
+        ok: false,
+        error: withRemediation(
+          error.message || 'Unknown serial write error',
+          `validate zone ${zoneId} command format and serial connectivity, then retry`
+        )
+      });
     }
 
     if (index < zones.length - 1 && interWriteDelayMs > 0) {

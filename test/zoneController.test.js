@@ -31,7 +31,11 @@ test('executeGroupCommand fans out in deterministic order with continue-on-error
   assert.deepEqual(writes, ['<01VO15\r', '<02VO15\r', '<03VO15\r']);
   assert.deepEqual(response.results, [
     { zoneId: '01', ok: true },
-    { zoneId: '02', ok: false, error: 'simulated write failure' },
+    {
+      zoneId: '02',
+      ok: false,
+      error: 'simulated write failure. Remediation: validate zone 02 command format and serial connectivity, then retry'
+    },
     { zoneId: '03', ok: true }
   ]);
   assert.deepEqual(response.summary, { total: 3, succeeded: 2, failed: 1 });

@@ -9,6 +9,10 @@ let port;
 let queueTail = Promise.resolve();
 let queueStopped = false;
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 function parseIntWithFallback(rawValue, fallback) {
   const parsed = Number.parseInt(rawValue, 10);
   return Number.isInteger(parsed) ? parsed : fallback;
@@ -32,7 +36,10 @@ function initPort() {
   port = new SerialPort(config);
 
   port.on('error', (error) => {
-    console.error('[dax88] serial error:', error.message);
+    console.error('[dax88] serial error:', withRemediation(
+      error.message || 'Unknown serial error',
+      'verify serial path permissions, cable/adapter connection, and configured serial parameters'
+    ));
   });
 
   return port;
@@ -103,7 +110,10 @@ function wait(ms) {
 function withTimeout(promise, timeoutMs, label) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error(`Serial queue task timed out (${label}) after ${timeoutMs}ms`));
+      reject(new Error(withRemediation(
+        `Serial queue task timed out (${label}) after ${timeoutMs}ms`,
+        'increase DAX88_QUEUE_TASK_TIMEOUT_MS or reduce command volume to prevent queue saturation'
+      )));
     }, timeoutMs);
 
     promise
@@ -139,7 +149,10 @@ function enqueueCommand(task, {
   label = 'serial-write'
 } = {}) {
   if (queueStopped) {
-    return Promise.reject(new Error('Serial queue is stopped'));
+    return Promise.reject(new Error(withRemediation(
+      'Serial queue is stopped',
+      'restart the API process or reinitialize queue state before sending new serial commands'
+    )));
   }
 
   const run = async () => {

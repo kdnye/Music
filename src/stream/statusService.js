@@ -5,6 +5,10 @@ const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 const DEFAULT_TIMEOUT_MS = 4000;
 const DEFAULT_CACHE_TTL_MS = 20000;
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 class StreamStatusServiceError extends Error {
   constructor(message, options = {}) {
     super(message);
@@ -97,7 +101,10 @@ function getCacheTtlMs(cacheTtlMs) {
 
 function buildCacheResponse(reason, ttlMs) {
   if (!lastSuccessfulCache.metadata || !lastSuccessfulCache.fetchedAt) {
-    throw new StreamStatusServiceError('No cached stream metadata available', {
+    throw new StreamStatusServiceError(withRemediation(
+      'No cached stream metadata available',
+      'verify UP2STREAM_BASE_URL/device connectivity and retry after one successful live poll'
+    ), {
       code: 'STREAM_STATUS_UNAVAILABLE',
       statusCode: 503,
       reason,
@@ -131,12 +138,18 @@ async function fetchPlayerStatus(options = {}) {
     });
 
     if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
-      return buildCacheResponse(`Unexpected response (${response.status})`, ttlMs);
+      return buildCacheResponse(withRemediation(
+        `Unexpected response (${response.status})`,
+        'check Up2Stream endpoint health and ensure /getPlayerStatus returns JSON with HTTP 200'
+      ), ttlMs);
     }
 
     const metadata = decodeMetadata(response.data);
     if (metadata.decodeError) {
-      return buildCacheResponse('Failed to decode metadata payload', ttlMs);
+      return buildCacheResponse(withRemediation(
+        'Failed to decode metadata payload',
+        'inspect Title/Artist/Album encoding and ensure fields are valid UTF-8 compatible hex'
+      ), ttlMs);
     }
 
     const fetchedAt = new Date().toISOString();
@@ -155,7 +168,10 @@ async function fetchPlayerStatus(options = {}) {
       stale: false
     };
   } catch (error) {
-    return buildCacheResponse(error.message || 'Failed to fetch stream metadata', ttlMs);
+    return buildCacheResponse(withRemediation(
+      error.message || 'Failed to fetch stream metadata',
+      'validate network access to device and adjust UP2STREAM_TIMEOUT_MS if requests are timing out'
+    ), ttlMs);
   }
 }
 

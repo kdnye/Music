@@ -8,9 +8,16 @@ const DEFAULT_BACKOFF_MS = Object.freeze([10000, 30000, 60000]);
 const DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 3;
 const HEX_FIELDS = ['Title', 'Artist', 'Album'];
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 class MetadataDecodeError extends Error {
   constructor(field, message) {
-    super(`Unable to decode ${field}: ${message}`);
+    super(withRemediation(
+      `Unable to decode ${field}: ${message}`,
+      `validate the ${field} field is even-length hex and UTF-8 compatible`
+    ));
     this.name = 'MetadataDecodeError';
   }
 }
@@ -137,7 +144,10 @@ function createStreamPoller({
       const response = await httpClient.get(endpoint, { timeout: timeoutMs });
 
       if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
-        throw new Error(`Unexpected response (${response.status})`);
+        throw new Error(withRemediation(
+          `Unexpected response (${response.status})`,
+          'verify Up2Stream endpoint /getPlayerStatus is reachable and returning JSON with HTTP 200'
+        ));
       }
 
       const now = new Date().toISOString();
@@ -166,7 +176,10 @@ function createStreamPoller({
         source: 'cache',
         stale: true,
         staleReason: cache.fetchedAt ? 'poll-error' : 'empty-cache',
-        error: error.message || 'Failed to poll Up2Stream metadata'
+        error: withRemediation(
+          error.message || 'Failed to poll Up2Stream metadata',
+          'check device IP/base URL, network reachability, and HTTP timeout settings'
+        )
       };
 
       emitHealth(cache.error);
