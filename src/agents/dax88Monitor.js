@@ -7,6 +7,10 @@ const DAX88_KNOWN_ZONES = Object.freeze(['01', '02', '03', '04', '05', '06', '07
 const DAX88_STATUS_PAYLOAD_HEX_LENGTH = 20;
 const DAX88_STATUS_FRAME_LENGTH = 1 + 2 + DAX88_STATUS_PAYLOAD_HEX_LENGTH;
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 function normalizeActiveZones(activeZones = []) {
   if (!Array.isArray(activeZones) || activeZones.length === 0) {
     return ['01', '02', '03', '04', '05', '06', '07', '08'];
@@ -91,7 +95,10 @@ function createSerialFrameReader(serialPort, timeoutMs) {
 
       const timeout = setTimeout(() => {
         cleanup();
-        reject(new Error('Serial read timeout'));
+        reject(new Error(withRemediation(
+          'Serial read timeout',
+          'verify DAX88 wiring/baud settings and confirm the zone keypad or controller is responding'
+        )));
       }, timeoutMs);
 
       serialPort.on('data', onData);
@@ -143,7 +150,8 @@ function createDax88Monitor({
     if (!nextState) {
       logger.warn?.('[dax88Monitor] ignoring malformed status frame', {
         zoneId,
-        frame: String(frame).trim()
+        frame: String(frame).trim(),
+        remediation: 'check protocol framing (>xx...\\r), verify zone ID is active, and inspect serial noise/cabling'
       });
       return null;
     }
@@ -181,7 +189,10 @@ function createDax88Monitor({
         }
       } catch (error) {
         cycleFailures += 1;
-        logger.error?.(`[dax88Monitor] poll failed for zone ${zoneId}:`, error.message);
+        logger.error?.(`[dax88Monitor] poll failed for zone ${zoneId}:`, withRemediation(
+          error.message || 'Unknown poll error',
+          `inspect serial logs for zone ${zoneId}, then retry after confirming connectivity and controller power`
+        ));
       }
     }
 
@@ -191,7 +202,10 @@ function createDax88Monitor({
       onHealthChange?.({
         offline,
         failures: consecutiveFailures,
-        error: `cycle failed for ${cycleFailures} zone(s)`,
+        error: withRemediation(
+          `cycle failed for ${cycleFailures} zone(s)`,
+          'review per-zone poll errors and keep polling enabled so state can self-heal after connectivity recovers'
+        ),
         at: new Date().toISOString()
       });
     } else if (consecutiveFailures > 0 || offline) {

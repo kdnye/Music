@@ -11,6 +11,10 @@ const browserTokenStore = new Map();
 
 const rateLimitStore = new Map();
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 function getClientIdentity(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.length > 0) {
@@ -63,7 +67,10 @@ function requireControlAuth(req, res, next) {
       success: false,
       error: {
         code: 'AUTH_NOT_CONFIGURED',
-        message: 'Control API auth is not configured'
+        message: withRemediation(
+          'Control API auth is not configured',
+          'set API_AUTH_TOKEN or DASHBOARD_LOGIN_PASSWORD before exposing control endpoints'
+        )
       }
     });
   }
@@ -73,7 +80,10 @@ function requireControlAuth(req, res, next) {
       success: false,
       error: {
         code: 'UNAUTHORIZED',
-        message: 'Missing bearer token'
+        message: withRemediation(
+          'Missing bearer token',
+          'send Authorization: Bearer <token> with a valid API or browser session token'
+        )
       }
     });
   }
@@ -82,7 +92,10 @@ function requireControlAuth(req, res, next) {
     success: false,
     error: {
       code: 'UNAUTHORIZED',
-      message: 'Invalid or expired bearer token'
+      message: withRemediation(
+        'Invalid or expired bearer token',
+        'request a new token via /api/auth/login or update API_AUTH_TOKEN client configuration'
+      )
     }
   });
 }
@@ -156,7 +169,10 @@ function rateLimitControls(req, res, next) {
       success: false,
       error: {
         code: 'RATE_LIMITED',
-        message: `Too many requests. Limit is ${MAX_REQUESTS} per ${WINDOW_MS}ms`
+        message: withRemediation(
+          `Too many requests. Limit is ${MAX_REQUESTS} per ${WINDOW_MS}ms`,
+          'throttle client retries or raise API_RATE_LIMIT_MAX for trusted internal clients'
+        )
       }
     });
   }

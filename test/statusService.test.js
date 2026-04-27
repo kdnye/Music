@@ -104,7 +104,7 @@ test('fetchPlayerStatus returns cache when polling fails and cache exists', asyn
 
   assert.equal(cached.source, 'cache');
   assert.equal(cached.metadata.Title, live.metadata.Title);
-  assert.equal(cached.error, 'network down');
+  assert.match(cached.error, /^network down\. Remediation:/);
   assert.equal(cached.fetchedAt, live.fetchedAt);
 });
 
@@ -122,7 +122,7 @@ test('fetchPlayerStatus throws structured error when polling fails before any li
     (error) => {
       assert.equal(error.name, 'StreamStatusServiceError');
       assert.equal(error.code, 'STREAM_STATUS_UNAVAILABLE');
-      assert.equal(error.reason, 'connection refused');
+      assert.match(error.reason, /^connection refused\. Remediation:/);
       return true;
     }
   );

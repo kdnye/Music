@@ -3,6 +3,10 @@ const path = require('path');
 
 const DEFAULT_GROUPS_PATH = path.join(process.cwd(), 'config', 'groups.json');
 
+function withRemediation(message, remediation) {
+  return `${message}. Remediation: ${remediation}`;
+}
+
 function normalizeZone(zone) {
   const zoneNumber = Number.parseInt(zone, 10);
   if (!Number.isInteger(zoneNumber) || zoneNumber < 1 || zoneNumber > 8) {
@@ -39,7 +43,10 @@ function parseGroupJson(rawJson, sourceLabel, logger = console) {
     const parsed = JSON.parse(rawJson);
     return normalizeGroups(parsed);
   } catch (error) {
-    logger.warn?.(`[groups] Failed to parse ${sourceLabel}: ${error.message}`);
+    logger.warn?.(`[groups] Failed to parse ${sourceLabel}: ${withRemediation(
+      error.message,
+      'fix invalid JSON syntax and ensure group values are arrays of zone IDs 1-8'
+    )}`);
     return {};
   }
 }
@@ -53,7 +60,10 @@ function loadFileGroups({ groupsFilePath = DEFAULT_GROUPS_PATH, logger = console
     const raw = fs.readFileSync(groupsFilePath, 'utf8');
     return parseGroupJson(raw, groupsFilePath, logger);
   } catch (error) {
-    logger.warn?.(`[groups] Failed to read group file ${groupsFilePath}: ${error.message}`);
+    logger.warn?.(`[groups] Failed to read group file ${groupsFilePath}: ${withRemediation(
+      error.message,
+      'verify file path/permissions and readable UTF-8 content'
+    )}`);
     return {};
   }
 }
